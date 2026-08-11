@@ -85,7 +85,7 @@ jobs:
           # Resolve repository state through the authenticated GitHub API. The
           # checkout deliberately does not persist Git credentials, so this also
           # works when a fresh target repository is private.
-          tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha 2>/dev/null || true)
+          tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha 2>/dev/null) || tag_commit=""
 
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             if [[ "$tag_commit" = "$GITHUB_SHA" ]]; then
@@ -333,7 +333,7 @@ jobs:
             artifacts/current/SHA256SUMS
           )
 
-          tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha 2>/dev/null || true)
+          tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha 2>/dev/null) || tag_commit=""
 
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             if [[ "$tag_commit" = "$GITHUB_SHA" ]]; then
@@ -365,7 +365,7 @@ jobs:
             "${release_assets[@]}"; then
             # A concurrent publisher may have won the race after our last check.
             if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-              tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha 2>/dev/null || true)
+              tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha 2>/dev/null) || tag_commit=""
               if [[ "$tag_commit" = "$GITHUB_SHA" ]]; then
                 echo "Release $RELEASE_TAG appeared concurrently for this source; reconciling canonical assets."
                 gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber "${release_assets[@]}"
