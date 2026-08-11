@@ -4,10 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish the configured AtlANTian release
+        description: Publish this AtlANTian build
         required: true
         type: boolean
         default: false
+      origin:
+        description: Internal dispatch origin
+        required: false
+        type: string
+        default: manual
   push:
     branches: [main]
     paths:
@@ -23,11 +28,11 @@ on:
 permissions:
   contents: read
 
-# Normal main pushes validate the configured release without publishing it.
-# Publication is explicit, idempotent, and derives repository identity from the
-# repository in which this workflow is actually running.
+# Relevant main pushes and Debian snapshot refreshes publish automatically.
+# A newer run cancels an older one before it can waste more build time or
+# publish a superseded main revision.
 concurrency:
-  group: atlantian-release-${{ github.event_name == 'workflow_dispatch' && inputs.publish && 'publish' || 'validate' }}
+  group: atlantian-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -48,6 +53,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Resolve automatic release version
+        id: auto_version
+        shell: bash
+        run: bash scripts/resolve-release-version.sh "$GITHUB_SHA"
 
       - name: Prepare release identity
         id: identity
@@ -77,7 +87,7 @@ jobs:
 
       - name: Check release state
         id: release_state
-        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.publish || inputs.origin == 'debian-watch'))
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -256,7 +266,7 @@ jobs:
         id: publication
         env:
           GH_TOKEN: ${{ github.token }}
-          PUBLISH_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+          PUBLISH_REQUESTED: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.publish || inputs.origin == 'debian-watch')) }}
           RELEASE_STATE: ${{ steps.release_state.outputs.state }}
         run: |
           set -euo pipefail
@@ -383,6 +393,7 @@ jobs:
             echo
             echo '| Stage | Outcome |'
             echo '|---|---|'
+            echo '| Automatic version | ${{ steps.auto_version.outputs.version }} |'
             echo '| Release state | ${{ steps.release_state.outputs.state }} |'
             echo '| Source contracts | ${{ steps.preflight.outcome }} |'
             echo '| Release inputs | ${{ steps.inputs.outcome }} |'
