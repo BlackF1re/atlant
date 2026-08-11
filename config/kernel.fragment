@@ -1,0 +1,159 @@
+# AtlANTian target hardware: keep the boot path resident and expose programmable logic.
+# 1 GiB board variants extend beyond the ARMv7 lowmem mapping. Keep HIGHMEM
+# explicit even though multi_v7_defconfig currently enables it, so a future
+# base-config change cannot silently hide the upper part of installed DDR.
+CONFIG_HIGHMEM=y
+CONFIG_FPGA=y
+CONFIG_FPGA_MGR_ZYNQ_FPGA=y
+CONFIG_FPGA_BRIDGE=y
+CONFIG_FPGA_REGION=y
+CONFIG_OF_FPGA_REGION=y
+CONFIG_OF_OVERLAY=y
+CONFIG_CONFIGFS_FS=y
+CONFIG_OF_CONFIGFS=y
+CONFIG_FW_LOADER=y
+CONFIG_LEDS_CLASS=y
+CONFIG_LEDS_GPIO=y
+CONFIG_UIO=y
+CONFIG_UIO_PDRV_GENIRQ=m
+CONFIG_UIO_DMEM_GENIRQ=m
+# PS serial, Ethernet/MDIO, GPIO and SD0 are cold-boot hardware. Pin routing
+# is described by the base DT only for electrically confirmed instances.
+CONFIG_SERIAL_XILINX_PS_UART=y
+CONFIG_SERIAL_XILINX_PS_UART_CONSOLE=y
+CONFIG_MACB=y
+CONFIG_PHYLIB=y
+CONFIG_BROADCOM_PHY=y
+CONFIG_NET_VENDOR_XILINX=y
+CONFIG_XILINX_EMACLITE=m
+CONFIG_XILINX_AXI_EMAC=m
+CONFIG_MDIO_BITBANG=m
+CONFIG_PTP_1588_CLOCK=y
+CONFIG_GPIO_ZYNQ=y
+# Both board buttons are exposed as standard input devices. KEY_PROG1/2
+# have no desktop/system default action, so applications retain full control.
+CONFIG_INPUT_EVDEV=y
+CONFIG_KEYBOARD_GPIO=y
+CONFIG_MMC=y
+CONFIG_MMC_BLOCK=y
+CONFIG_MMC_SDHCI=y
+CONFIG_MMC_SDHCI_PLTFM=y
+CONFIG_MMC_SDHCI_OF_ARASAN=y
+# Keep the PS I2C and SPI controller drivers resident. There is no electrically
+# verified external PS I2C/SPI routing: headers marked I2C are PL candidates.
+# Their DT nodes therefore remain disabled in the base image; a validated
+# hardware/profile overlay can enable them later without a kernel rebuild or
+# inventing unsafe /dev/i2c-* devices.
+CONFIG_I2C_CADENCE=y
+CONFIG_I2C_CHARDEV=y
+CONFIG_SPI_CADENCE=y
+CONFIG_SPI_SPIDEV=y
+# QSPI is a second PS SPI controller. No attached flash device is currently
+# verified, so it remains unused until a hardware-specific DT overlay enables it.
+CONFIG_SPI_ZYNQ_QSPI=m
+# The controller drivers do not claim pins while the matching DT nodes are
+# disabled. Keeping CAN and ChipIdea support available avoids a later kernel
+# rebuild when a physically routed PS interface is verified.
+CONFIG_CAN=y
+CONFIG_CAN_RAW=y
+CONFIG_CAN_DEV=y
+CONFIG_CAN_XILINXCAN=y
+CONFIG_USB_CHIPIDEA=y
+CONFIG_USB_CHIPIDEA_HOST=y
+CONFIG_USB_CHIPIDEA_UDC=y
+CONFIG_USB_ULPI=y
+# Keep the small, standard USB device classes useful on a future verified
+# USB0 pinmux/profile. They instantiate nothing while USB0 stays disabled.
+CONFIG_USB_ACM=m
+CONFIG_USB_SERIAL=m
+CONFIG_IIO=y
+# XADC is a confirmed PS peripheral and the only on-board temperature/rail
+# source. It must be resident: lean images are allowed to omit optional PL
+# modules, but `sensors` must work at the first prompt without modprobe.
+CONFIG_XILINX_XADC=y
+# Expose the XADC through the standard hwmon ABI as well as native IIO.
+CONFIG_SENSORS_IIO_HWMON=y
+CONFIG_MTD=y
+CONFIG_MTD_RAW_NAND=y
+CONFIG_MTD_NAND_PL35X=y
+CONFIG_MTD_NAND_ECC_SW_BCH=y
+CONFIG_MTD_CMDLINE_PARTS=y
+CONFIG_MTD_OF_PARTS=y
+CONFIG_MTD_UBI=y
+CONFIG_MTD_UBI_BLOCK=y
+CONFIG_UBIFS_FS=y
+CONFIG_UBIFS_FS_LZO=y
+# NAND edition: immutable Debian lives in a Zstd-compressed SquashFS stored in
+# a static UBI volume and exposed through ubiblock. Writable changes remain on
+# an LZO-compressed UBIFS upper (or an explicitly adopted ext4 microSD upper).
+# Every component needed before switch_root must therefore be built in.
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XATTR=y
+CONFIG_SQUASHFS_ZSTD=y
+CONFIG_OVERLAY_FS=y
+# Keep the Cadence watchdog available to Linux, but leave activation to
+# userspace. SYSFS exposes status/timeout/bootstatus for diagnostics and
+# NOWAYOUT stays off so an explicitly started watchdog can still be stopped.
+CONFIG_WATCHDOG=y
+CONFIG_WATCHDOG_SYSFS=y
+# CONFIG_WATCHDOG_NOWAYOUT is not set
+CONFIG_CADENCE_WATCHDOG=y
+CONFIG_KEXEC=y
+CONFIG_BLK_DEV_INITRD=y
+# No disk-backed swap is ever created. AtlANTian's zram service creates one
+# compressed device equal to a third of installed RAM during boot.
+# zram is required by the default no-disk-swap policy; keep it built in so
+# the lean image does not depend on an omitted modules payload during boot.
+CONFIG_ZRAM=y
+CONFIG_ZSMALLOC=y
+CONFIG_CRYPTO_LZ4=y
+CONFIG_LZ4_COMPRESS=y
+
+# Reusable PL endpoints. They create no devices until a validated FPGA
+# profile supplies matching DT nodes, but avoid rebuilding the OS for the
+# board's documented GPIO/I2C/SPI/UART/PWM/audio/video use cases.
+# The default status-LED FPGA profile needs this driver during early overlay
+# application. Keep it built in so lean images do not depend on a modules
+# payload being present before D5-D8 are exported through LED class.
+CONFIG_GPIO_XILINX=y
+CONFIG_I2C_XILINX=m
+CONFIG_SPI_XILINX=m
+CONFIG_SERIAL_UARTLITE=m
+CONFIG_SERIAL_UARTLITE_NR_UARTS=8
+CONFIG_PWM=y
+CONFIG_PWM_XILINX=m
+CONFIG_XILINX_DMA=m
+CONFIG_XILINX_INTC=y
+CONFIG_XILINX_PR_DECOUPLER=m
+CONFIG_SND=m
+CONFIG_SND_SOC=m
+CONFIG_SND_DMAENGINE_PCM=m
+CONFIG_SND_SOC_XILINX_I2S=m
+CONFIG_SND_SOC_XILINX_AUDIO_FORMATTER=m
+CONFIG_SND_SOC_XILINX_SPDIF=m
+CONFIG_MEDIA_SUPPORT=m
+CONFIG_MEDIA_CONTROLLER=y
+CONFIG_VIDEO_DEV=m
+CONFIG_V4L2_MEM2MEM_DEV=m
+CONFIG_VIDEOBUF2_CORE=m
+CONFIG_VIDEOBUF2_DMA_CONTIG=m
+CONFIG_VIDEO_XILINX=m
+CONFIG_VIDEO_XILINX_CSI2RXSS=m
+CONFIG_VIDEO_XILINX_TPG=m
+CONFIG_VIDEO_XILINX_VTC=m
+CONFIG_FB=y
+CONFIG_FB_XILINX=m
+
+# Development and router/server primitives expected from a general-purpose
+# AtlANTian installation. These remain inert until users configure them.
+CONFIG_TUN=m
+CONFIG_BRIDGE=m
+CONFIG_VLAN_8021Q=m
+CONFIG_BONDING=m
+CONFIG_NETFILTER=y
+CONFIG_NF_TABLES=m
+CONFIG_NF_CONNTRACK=m
+CONFIG_NF_NAT=m
+CONFIG_NFT_NAT=m
+CONFIG_IP_NF_IPTABLES=m
+CONFIG_IP6_NF_IPTABLES=m

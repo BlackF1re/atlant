@@ -1,0 +1,226 @@
+// SPDX-License-Identifier: GPL-2.0
+/* AtlANTian base hardware contract for Bitmain Antminer S9. */
+/dts-v1/;
+#include "zynq-7000.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+
+/ {
+	model = "Bitmain Antminer S9";
+	compatible = "bitmain,antminer-s9", "xlnx,zynq-7000";
+
+	aliases {
+		ethernet0 = &gem0;
+		serial0 = &uart1;
+		mmc0 = &sdhci0;
+		gpio0 = &gpio0;
+		nand0 = &nfc0;
+		xadc0 = &adc;
+	};
+
+	/*
+	 * 1 GiB is the Antminer S9 probe ceiling, not a claim that every board
+	 * contains 1 GiB. U-Boot probes the installed DDR and ARM bootm fixes this
+	 * /memory node to the detected bank size before Linux starts. Keep the DT
+	 * ceiling at the hardware maximum and never cap Linux with a mem= argument.
+	 */
+	memory@0 {
+		device_type = "memory";
+		reg = <0x0 0x40000000>;
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+		bootcount@efffff0 { reg = <0x0efffff0 0x10>; no-map; };
+		fpga_space@f000000 { reg = <0x0f000000 0x01000000>; no-map; };
+	};
+
+	chosen { stdout-path = "serial0:115200n8"; };
+
+	/*
+	 * D3 is the bicolour board-status LED. Its two 2N7002 low-side
+	 * switches are driven directly by PS MIO37 (red) and MIO38 (green).
+	 * A high GPIO level drives a MOSFET gate and lights the corresponding LED,
+	 * so both outputs are active-high. Export them through the standard LED class rather
+	 * than leaving them as undocumented GPIOs.
+	 */
+	leds {
+		compatible = "gpio-leds";
+
+		status_red {
+			label = "atlantian:red:status";
+			gpios = <&gpio0 37 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+		};
+
+		activity_green {
+			label = "atlantian:green:activity";
+			gpios = <&gpio0 38 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+		};
+
+		/* D2: V3P3 -> R27 -> LED -> MIO15, therefore active-low. */
+		fpga_ready_green {
+			label = "atlantian:green:d2";
+			gpios = <&gpio0 15 GPIO_ACTIVE_LOW>;
+			default-state = "off";
+		};
+	};
+
+	/*
+	 * The two physical keys are pulled high and short their MIO line to GND
+	 * when pressed. They deliberately use otherwise-unbound KEY_PROG codes:
+	 * the base system gives them no policy, so applications may subscribe to
+	 * their input events without a button unexpectedly powering down the board.
+	 */
+	buttons {
+		compatible = "gpio-keys";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_board_buttons>;
+
+		s1_short {
+			label = "s1_short";
+			linux,code = <KEY_PROG1>;
+			gpios = <&gpio0 47 GPIO_ACTIVE_LOW>;
+			debounce-interval = <20>;
+		};
+
+		s2_long {
+			label = "s2_long";
+			linux,code = <KEY_PROG2>;
+			gpios = <&gpio0 51 GPIO_ACTIVE_LOW>;
+			debounce-interval = <20>;
+		};
+	};
+
+	/* The base image supplies FPGA infrastructure, never a bitstream. */
+	fpga_full: fpga-full {
+		compatible = "fpga-region";
+		fpga-mgr = <&devcfg>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+	};
+
+	/* Preserve native IIO and also expose XADC through standard hwmon/sensors. */
+	xadc_hwmon: xadc-hwmon {
+		compatible = "iio-hwmon";
+		io-channels = <&adc 0>, <&adc 1>, <&adc 2>, <&adc 3>,
+			      <&adc 4>, <&adc 5>, <&adc 6>, <&adc 7>, <&adc 8>;
+	};
+};
+
+&clkc { ps-clk-frequency = <33333333>; };
+
+&gem0 {
+	status = "okay";
+	phy-mode = "rgmii-id";
+	phy-handle = <&ethernet_phy>;
+	ethernet_phy: ethernet-phy@1 { reg = <1>; };
+};
+
+&sdhci0 { status = "okay"; disable-wp; };
+&uart1 { status = "okay"; };
+/*
+ * The boot firmware configures these pads as USB (the observed MIO value
+ * is 0x1404, whose mux selector is 2). On the target board they are physically
+ * wired only to the D3 MOSFET gates, so that mux leaves both LEDs outside
+ * Linux GPIO control.
+ * Merely attaching gpio-leds changes the GPIO data register, but not the
+ * MIO multiplexor, which is why D3 could remain permanently lit. Claim both
+ * pads explicitly as GPIO before the LED class binds them.
+ */
+&pinctrl0 {
+	pinctrl_d2_led: d2-led {
+		mux {
+			groups = "gpio0_15_grp";
+			function = "gpio0";
+		};
+	};
+
+	pinctrl_d3_leds: d3-leds {
+		mux {
+			groups = "gpio0_37_grp", "gpio0_38_grp";
+			function = "gpio0";
+		};
+	};
+
+	/*
+	 * Physical PS outputs that the vendor FSBL leaves in the USB0 mux.
+	 * Claim only their mux here. Linux keeps every line as a high-impedance
+	 * input until a deliberate libgpiod consumer requests it, so hashboard
+	 * enables and the buzzer cannot assert during boot.
+	 */
+	pinctrl_board_aux: board-aux-gpio {
+		mux {
+			groups = "gpio0_28_grp", "gpio0_29_grp", "gpio0_30_grp",
+				 "gpio0_31_grp", "gpio0_32_grp", "gpio0_33_grp",
+				 "gpio0_34_grp", "gpio0_35_grp", "gpio0_36_grp",
+				 "gpio0_39_grp";
+			function = "gpio0";
+		};
+	};
+
+	pinctrl_board_buttons: board-buttons {
+		mux {
+			groups = "gpio0_47_grp", "gpio0_51_grp";
+			function = "gpio0";
+		};
+	};
+};
+
+&gpio0 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_d2_led &pinctrl_d3_leds &pinctrl_board_aux>;
+	/*
+	 * Names are an ABI for libgpiod users. They claim neither direction nor
+	 * polarity, so potentially hazardous outputs (buzzer and hashboard EN)
+	 * remain inactive until an application deliberately requests them.
+	 * Only PS MIO0..53 are named; the remaining EMIO lines stay available for
+	 * a loaded PL profile.
+	 */
+	gpio-line-names =
+		"nand-mio0", "nand-mio1", "nand-mio2", "nand-mio3",
+		"nand-mio4", "nand-mio5", "nand-mio6", "nand-mio7",
+		"nand-mio8", "nand-mio9", "nand-mio10", "nand-mio11",
+		"nand-mio12", "nand-mio13", "nand-mio14", "d2-green",
+		"mio16", "mio17", "mio18", "mio19", "mio20", "mio21",
+		"mio22", "mio23", "mio24", "mio25", "mio26", "mio27",
+		"hashboard-enable1", "hashboard-enable2",
+		"hashboard-enable3", "hashboard-enable4",
+		"hashboard-enable5", "hashboard-enable6",
+		"hashboard-enable7", "hashboard-enable8",
+		"hashboard-enable9", "d3-red", "d3-green", "buzzer",
+		"sd-d0", "sd-d1", "sd-d2", "sd-d3", "sd-cmd", "sd-clk",
+		"sd-card-detect", "s1-short", "uart1-tx", "uart1-rx",
+		"sd-write-protect", "s2-long", "mdio", "mdc";
+};
+&devcfg { status = "okay"; };
+&adc {
+	status = "okay";
+	#io-channel-cells = <1>;
+};
+&smcc { status = "okay"; };
+&nfc0 {
+	status = "okay";
+
+	/* The PL353 driver discovers chips from child chip-select nodes. */
+	nand_chip: nand@0 {
+		reg = <0>;
+		/*
+		 * MT29F2G08ABAEAWP requires 4-bit correction per 512-byte step and
+		 * provides a compatible Micron on-die BCH engine. The generic NAND
+		 * binding selects on-die ECC by pointing nand-ecc-engine at the chip
+		 * node itself. Keep the required geometry explicit so probe fails
+		 * closed if a future replacement chip cannot satisfy this contract.
+		 */
+		nand-ecc-engine = <&nand_chip>;
+		nand-ecc-algo = "bch";
+		nand-ecc-strength = <4>;
+		nand-ecc-step-size = <512>;
+	};
+};
+&watchdog0 { reset-on-timeout; timeout-sec = <200>; };

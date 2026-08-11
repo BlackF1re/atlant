@@ -1,0 +1,61 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * Matching DT description for fpga-build/status_leds_v1.
+ * The AXI address and bit order are fixed ABI of the profile.  This file is
+ * deliberately a plugin: it must only be applied after its bitstream has
+ * reached FPGA Manager state "operating".
+ */
+/ {
+	compatible = "bitmain,antminer-s9", "xlnx,zynq-7000";
+
+	fragment@0 {
+		target = <&fpga_full>;
+		__overlay__ {
+			/* FPGA Region loads this firmware before populating children. */
+			firmware-name = "atlantian/status-leds/atlantian-status-leds.bin";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			atl_pl_status_gpio: pl-status-gpio@7fff8000 {
+				/* Mainline gpio-xilinx binds this compatibility string. */
+				compatible = "xlnx,xps-gpio-1.00.a";
+				reg = <0x7fff8000 0x8000>;
+				clocks = <&clkc 15>;
+				gpio-controller;
+				#gpio-cells = <2>;
+				xlnx,gpio-width = <4>;
+				xlnx,all-output = <1>;
+				xlnx,is-dual = <0>;
+				status = "okay";
+			};
+
+			atl_pl_status_leds: pl-status-leds {
+				compatible = "gpio-leds";
+
+				d5 {
+					label = "atlantian:pl:d5";
+					/* active-low: this LED circuit sinks current in the PL */
+					gpios = <&atl_pl_status_gpio 2 1>;
+					default-state = "off";
+				};
+				d6 {
+					label = "atlantian:pl:d6";
+					gpios = <&atl_pl_status_gpio 3 1>;
+					default-state = "off";
+				};
+				d7 {
+					label = "atlantian:pl:d7";
+					gpios = <&atl_pl_status_gpio 0 1>;
+					default-state = "off";
+				};
+				d8 {
+					label = "atlantian:pl:d8";
+					gpios = <&atl_pl_status_gpio 1 1>;
+					default-state = "off";
+				};
+			};
+		};
+	};
+};

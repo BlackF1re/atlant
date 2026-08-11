@@ -1,0 +1,12 @@
+[Unit]
+Description=Grow AtlANTian root filesystem to SD-card capacity
+After=local-fs.target
+Before=ssh.service multi-user.target
+ConditionPathExists=/dev/mmcblk0p2
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/atlantian-grow-rootfs
+
+[Install]
+WantedBy=multi-user.target

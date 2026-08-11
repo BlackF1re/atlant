@@ -1,0 +1,404 @@
+name: Build & Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the configured AtlANTian release
+        required: true
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-release.yml'
+      - 'board/**'
+      - 'config/**'
+      - 'debian-*.sha256'
+      - 'fpga/**'
+      - 'kernel-overlay/**'
+      - 'scripts/**'
+      - 'systemd/**'
+
+permissions:
+  contents: read
+
+# Normal main pushes validate the configured release without publishing it.
+# Publication is explicit, idempotent, and derives repository identity from the
+# repository in which this workflow is actually running.
+concurrency:
+  group: atlantian-release-${{ github.event_name == 'workflow_dispatch' && inputs.publish && 'publish' || 'validate' }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    name: Build release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      ATLANTIAN_GITHUB_REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare release identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ATLANTIAN_SOURCE_REVISION
+          ATLANTIAN_SOURCE_REVISION=$(git rev-parse --short=12 "$GITHUB_SHA")
+          . config/release.env
+          . config/u-boot.env
+          {
+            echo "ATLANTIAN_SOURCE_REVISION=$ATLANTIAN_SOURCE_REVISION"
+            echo "ATLANTIAN_SOURCE_ID=$ATLANTIAN_SOURCE_ID"
+            echo "ATLANTIAN_VERSION=$ATLANTIAN_VERSION"
+            echo "ATLANTIAN_DEB_VERSION=$ATLANTIAN_DEB_VERSION"
+            echo "ATLANTIAN_PRERELEASE=$ATLANTIAN_PRERELEASE"
+            echo "ATLANTIAN_RELEASE_ID=$ATLANTIAN_RELEASE_ID"
+            echo "ATLANTIAN_IMAGE_NAME=$ATLANTIAN_IMAGE_NAME"
+            echo "RELEASE_TAG=v$ATLANTIAN_VERSION"
+          } >> "$GITHUB_ENV"
+          {
+            echo "debian_codename=$DEBIAN_CODENAME"
+            echo "kernel_commit=$ATLANTIAN_KERNEL_COMMIT"
+            echo "kernel_localversion=$ATLANTIAN_KERNEL_LOCALVERSION"
+            echo "uboot_commit=$ATLANTIAN_UBOOT_COMMIT"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check release state
+        id: release_state
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Resolve repository state through the authenticated GitHub API. The
+          # checkout deliberately does not persist Git credentials, so this also
+          # works when a fresh target repository is private.
+          tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha 2>/dev/null || true)
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [[ "$tag_commit" = "$GITHUB_SHA" ]]; then
+              state=published-current
+              echo "Release $RELEASE_TAG already exists for this exact source revision; publication is an idempotent reconciliation."
+            else
+              state=published-other
+              echo "Release $RELEASE_TAG already exists for another source revision (${tag_commit:-unknown})."
+              echo 'The build will still be fully validated, but the published release will remain unchanged.'
+            fi
+          elif [[ -n "$tag_commit" ]]; then
+            if [[ "$tag_commit" = "$GITHUB_SHA" ]]; then
+              state=tag-current
+              echo "Unattached tag $RELEASE_TAG already identifies this source revision."
+            else
+              state=tag-other
+              echo "Unattached tag $RELEASE_TAG points to $tag_commit."
+              echo 'It may be retargeted only after every build and publication gate passes.'
+            fi
+          else
+            state=unpublished
+            echo "No existing release state for $RELEASE_TAG; this is a clean publication."
+          fi
+
+          {
+            echo "state=$state"
+            echo "tag_commit=$tag_commit"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate source contracts
+        id: preflight
+        run: |
+          set -euo pipefail
+          bash scripts/test-build-orchestration.sh
+          bash scripts/test-runtime-policy.sh
+          bash scripts/test-source-contracts.sh
+          bash scripts/test-update-leds.sh
+
+      - name: Validate release inputs
+        id: inputs
+        run: bash scripts/validate-release-inputs.sh
+
+      - name: Install build dependencies
+        id: dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            debootstrap qemu-user-static binfmt-support \
+            gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
+            bc bison flex libssl-dev libncurses-dev device-tree-compiler \
+            u-boot-tools kmod cpio rsync pigz xz-utils zstd e2fsprogs dosfstools parted \
+            mtd-utils squashfs-tools jq \
+            libelf-dev libdw-dev git curl ca-certificates sudo \
+            python3 python3-dev python3-setuptools python3-pyelftools swig
+
+      - name: Compute toolchain fingerprint
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          fingerprint=$({
+            arm-linux-gnueabihf-gcc --version
+            arm-linux-gnueabihf-ld --version
+          } | sha256sum | awk '{print $1}')
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Debian packages
+        id: debootstrap_cache
+        # v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: .cache/debootstrap
+          key: debootstrap-${{ steps.identity.outputs.debian_codename }}-${{ hashFiles('config/debian-snapshot.env') }}
+          restore-keys: |
+            debootstrap-${{ steps.identity.outputs.debian_codename }}-
+
+      - name: Cache Linux build tree
+        id: kernel_cache
+        # v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: out/linux-src
+          key: linux-build-${{ steps.identity.outputs.kernel_commit }}-${{ steps.identity.outputs.kernel_localversion }}-${{ steps.toolchain.outputs.fingerprint }}-${{ hashFiles('board/zynq-bitmain-antminer-s9.dts', 'config/kernel.fragment', 'config/kernel-prune.fragment', 'kernel-overlay/**', 'scripts/build-kernel.sh') }}
+
+      - name: Cache U-Boot source
+        id: uboot_cache
+        # v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: out/u-boot-src
+          key: uboot-source-${{ steps.identity.outputs.uboot_commit }}
+
+      - name: Prepare Linux source
+        id: kernel_source
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          . config/release.env
+          current=$(git -C out/linux-src rev-parse HEAD 2>/dev/null || true)
+          if [[ "$current" = "$ATLANTIAN_KERNEL_COMMIT" ]]; then
+            git -C out/linux-src reset --quiet --hard "$ATLANTIAN_KERNEL_COMMIT"
+            echo "Using cached pinned Linux build tree at $ATLANTIAN_KERNEL_COMMIT"
+          else
+            if [[ ! -d out/linux-src/.git ]]; then
+              rm -rf out/linux-src
+              git init out/linux-src
+              git -C out/linux-src remote add origin https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git
+            fi
+            git -C out/linux-src remote set-url origin https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git
+            git -C out/linux-src fetch --depth 1 origin "$ATLANTIAN_KERNEL_COMMIT"
+            git -C out/linux-src checkout --detach --force FETCH_HEAD
+            git -C out/linux-src clean -ffdqx
+          fi
+          test "$(git -C out/linux-src rev-parse HEAD)" = "$ATLANTIAN_KERNEL_COMMIT"
+
+      - name: Build root filesystems
+        id: rootfs
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          ATLANTIAN_DEBOOTSTRAP_CACHE: ${{ github.workspace }}/.cache/debootstrap
+          ATLANTIAN_SKIP_PREFLIGHT: '1'
+        run: sudo -E bash ./scripts/build-incremental.sh rootfs
+
+      - name: Build Linux kernel
+        id: kernel
+        env:
+          ATLANTIAN_SKIP_PREFLIGHT: '1'
+        run: sudo -E bash ./scripts/build-incremental.sh kernel
+
+      - name: Build release artifacts
+        id: artifacts
+        env:
+          ATLANTIAN_SKIP_PREFLIGHT: '1'
+        run: |
+          set -euo pipefail
+          sudo -E bash ./scripts/build-incremental.sh artifacts
+          sudo chown -R "$USER:$USER" \
+            artifacts .cache/debootstrap out/linux-src out/boot out/bootloader \
+            out/u-boot-src out/u-boot-build out/u-boot-nand-build out/nand
+
+      - name: Validate release artifacts
+        id: artifact_check
+        run: bash scripts/test-release-artifacts.sh artifacts/current
+
+      - name: Validate SD image layout
+        id: image_check
+        run: sudo -E bash scripts/test-image-layout.sh "artifacts/current/$ATLANTIAN_IMAGE_NAME.img"
+
+      - name: Validate NAND bundle
+        id: nand_check
+        run: bash scripts/test-nand-artifacts.sh out/nand/bundle "artifacts/current/$ATLANTIAN_IMAGE_NAME.img"
+
+      - name: Test SD upgrade
+        id: sd_upgrade
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sudo -E bash scripts/test-release-upgrade.sh artifacts/current
+
+      - name: Test NAND rebase
+        id: nand_rebase
+        run: sudo -E bash scripts/test-nand-rebase.sh out/rootfs-nand
+
+      - name: Verify source tree integrity
+        id: source_integrity
+        run: git diff --exit-code
+
+      - name: Check publication eligibility
+        id: publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+          RELEASE_STATE: ${{ steps.release_state.outputs.state }}
+        run: |
+          set -euo pipefail
+          if [[ "$PUBLISH_REQUESTED" != true ]]; then
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+            echo 'Validation-only run: release publication is disabled.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [[ "$RELEASE_STATE" = published-other ]]; then
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+            echo "Release $RELEASE_TAG is already published from another source revision; treating this publish request as an idempotent no-op." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          main_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [[ "$main_sha" = "$GITHUB_SHA" ]]; then
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+            echo 'This build is still the main branch tip and may publish or reconcile its release.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+            echo 'This build was superseded by a newer main commit; publication is skipped.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Generate release notes
+        if: steps.publication.outputs.publish == 'true'
+        run: bash scripts/generate-release-notes.sh "$RELEASE_TAG" "$GITHUB_SHA"
+
+      - name: Verify publication payload
+        if: steps.publication.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          test "$RELEASE_TAG" = "v$ATLANTIAN_VERSION"
+          test -s "artifacts/current/$ATLANTIAN_IMAGE_NAME.img"
+          test -s "artifacts/current/atlantian-nand-$ATLANTIAN_VERSION.tar.zst"
+          test "$(find artifacts/current -maxdepth 1 -name '*.img' -type f | wc -l)" -eq 1
+          test "$(find artifacts/current -maxdepth 1 -name '*.deb' -type f | wc -l)" -eq 3
+          (cd artifacts/current && sha256sum -c SHA256SUMS)
+
+      - name: Attest build provenance
+        id: attestation
+        if: steps.publication.outputs.publish == 'true' || (github.event_name == 'workflow_dispatch' && inputs.publish == false)
+        # v4.2.2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-checksums: artifacts/current/SHA256SUMS
+
+      - name: Upload release artifact
+        if: steps.publication.outputs.publish == 'true'
+        # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: atlantian-${{ env.ATLANTIAN_VERSION }}
+          path: |
+            artifacts/current/*.img
+            artifacts/current/*.tar.zst
+            artifacts/current/*.deb
+            artifacts/current/*.packages.tsv
+            artifacts/current/*.snapshot.txt
+            artifacts/current/RELEASE-METADATA.json
+            artifacts/current/SHA256SUMS
+
+      - name: Publish GitHub release
+        if: steps.publication.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_assets=(
+            artifacts/current/*.img
+            artifacts/current/*.tar.zst
+            artifacts/current/*.deb
+            artifacts/current/RELEASE-METADATA.json
+            artifacts/current/SHA256SUMS
+          )
+
+          tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha 2>/dev/null || true)
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [[ "$tag_commit" = "$GITHUB_SHA" ]]; then
+              echo "Release $RELEASE_TAG already exists for this source; reconciling canonical assets."
+              gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber "${release_assets[@]}"
+            else
+              echo "Release $RELEASE_TAG was published from another source revision while this build was running; leaving it unchanged."
+            fi
+            exit 0
+          fi
+
+          if [[ -n "$tag_commit" && "$tag_commit" != "$GITHUB_SHA" ]]; then
+            echo "Retargeting unattached release tag $RELEASE_TAG: $tag_commit -> $GITHUB_SHA"
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$RELEASE_TAG" \
+              -f sha="$GITHUB_SHA" -F force=true >/dev/null
+          fi
+
+          prerelease=()
+          if [[ -n "$ATLANTIAN_PRERELEASE" ]]; then
+            prerelease+=(--prerelease)
+          fi
+
+          if ! gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "AtlANTian GNU/Linux $ATLANTIAN_VERSION" \
+            --notes-file release-notes.md \
+            "${prerelease[@]}" \
+            "${release_assets[@]}"; then
+            # A concurrent publisher may have won the race after our last check.
+            if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha 2>/dev/null || true)
+              if [[ "$tag_commit" = "$GITHUB_SHA" ]]; then
+                echo "Release $RELEASE_TAG appeared concurrently for this source; reconciling canonical assets."
+                gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber "${release_assets[@]}"
+                exit 0
+              fi
+            fi
+            exit 1
+          fi
+
+      - name: Write workflow summary
+        if: always()
+        run: |
+          {
+            echo '## AtlANTian build & release'
+            echo
+            echo '| Stage | Outcome |'
+            echo '|---|---|'
+            echo '| Release state | ${{ steps.release_state.outputs.state }} |'
+            echo '| Source contracts | ${{ steps.preflight.outcome }} |'
+            echo '| Release inputs | ${{ steps.inputs.outcome }} |'
+            echo '| Dependencies | ${{ steps.dependencies.outcome }} |'
+            echo '| Debian package cache | ${{ steps.debootstrap_cache.outputs.cache-hit }} |'
+            echo '| Linux build cache | ${{ steps.kernel_cache.outputs.cache-hit }} |'
+            echo '| U-Boot source cache | ${{ steps.uboot_cache.outputs.cache-hit }} |'
+            echo '| Root filesystems | ${{ steps.rootfs.outcome }} |'
+            echo '| Linux kernel | ${{ steps.kernel.outcome }} |'
+            echo '| Release artifacts | ${{ steps.artifacts.outcome }} |'
+            echo '| Artifact validation | ${{ steps.artifact_check.outcome }} |'
+            echo '| SD image layout | ${{ steps.image_check.outcome }} |'
+            echo '| NAND bundle | ${{ steps.nand_check.outcome }} |'
+            echo '| SD upgrade | ${{ steps.sd_upgrade.outcome }} |'
+            echo '| NAND rebase | ${{ steps.nand_rebase.outcome }} |'
+            echo '| Source tree integrity | ${{ steps.source_integrity.outcome }} |'
+            echo '| Provenance attestation | ${{ steps.attestation.outcome }} |'
+            echo '| Publication eligible | ${{ steps.publication.outputs.publish }} |'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,101 @@
+# AtlANTian targets the Zynq-7000 Antminer S9 control-board platform, not a
+# generic ARMv7 distribution kernel. multi_v7_defconfig is still used as a
+# conservative baseline, then this fragment removes platforms and buses that
+# cannot exist on the target hardware. Generic USB and programmable-logic
+# frameworks stay enabled by kernel.fragment.
+
+# Only the Xilinx Zynq platform is physically relevant.
+# CONFIG_ARCH_VIRT is not set
+# CONFIG_ARCH_AIROHA is not set
+# CONFIG_ARCH_SUNPLUS is not set
+# CONFIG_ARCH_UNIPHIER is not set
+# CONFIG_ARCH_ACTIONS is not set
+# CONFIG_ARCH_ALPINE is not set
+# CONFIG_ARCH_ARTPEC is not set
+# CONFIG_ARCH_ASPEED is not set
+# CONFIG_ARCH_AT91 is not set
+# CONFIG_ARCH_BCM is not set
+# CONFIG_ARCH_BERLIN is not set
+# CONFIG_ARCH_DIGICOLOR is not set
+# CONFIG_ARCH_EXYNOS is not set
+# CONFIG_ARCH_HIGHBANK is not set
+# CONFIG_ARCH_HISI is not set
+# CONFIG_ARCH_HPE is not set
+# CONFIG_ARCH_MXC is not set
+# CONFIG_ARCH_KEYSTONE is not set
+# CONFIG_ARCH_MEDIATEK is not set
+# CONFIG_ARCH_MESON is not set
+# CONFIG_ARCH_MILBEAUT is not set
+# CONFIG_ARCH_MMP is not set
+# CONFIG_ARCH_MVEBU is not set
+# CONFIG_ARCH_OMAP2PLUS is not set
+# CONFIG_ARCH_OMAP3 is not set
+# CONFIG_ARCH_OMAP4 is not set
+# CONFIG_SOC_OMAP5 is not set
+# CONFIG_SOC_AM33XX is not set
+# CONFIG_SOC_AM43XX is not set
+# CONFIG_SOC_DRA7XX is not set
+# CONFIG_SOC_TI81XX is not set
+# CONFIG_ARCH_QCOM is not set
+# CONFIG_ARCH_ROCKCHIP is not set
+# CONFIG_ARCH_RENESAS is not set
+# CONFIG_ARCH_INTEL_SOCFPGA is not set
+# CONFIG_ARCH_SPEAR13XX is not set
+# CONFIG_ARCH_STI is not set
+# CONFIG_ARCH_STM32 is not set
+# CONFIG_ARCH_SUNXI is not set
+# CONFIG_ARCH_TEGRA is not set
+# CONFIG_ARCH_U8500 is not set
+# CONFIG_ARCH_VEXPRESS is not set
+# CONFIG_ARCH_WM8850 is not set
+
+# The target platform exposes no PCI/PCIe root complex and has no radio hardware.
+# CONFIG_PCI is not set
+# CONFIG_WLAN is not set
+# CONFIG_CFG80211 is not set
+# CONFIG_MAC80211 is not set
+# CONFIG_BT is not set
+# CONFIG_NFC is not set
+# CONFIG_RFKILL is not set
+
+# There is no ATA/SATA controller or connector. USB mass storage remains
+# supported through the SCSI disk layer and CONFIG_USB_STORAGE.
+# CONFIG_ATA is not set
+
+# Retain media/V4L2 core and Xilinx PL video endpoints, but not television,
+# radio, webcam or synthetic test devices from the universal ARM config.
+# CONFIG_MEDIA_ANALOG_TV_SUPPORT is not set
+# CONFIG_MEDIA_DIGITAL_TV_SUPPORT is not set
+# CONFIG_MEDIA_RADIO_SUPPORT is not set
+# CONFIG_MEDIA_SDR_SUPPORT is not set
+# CONFIG_MEDIA_TEST_SUPPORT is not set
+# CONFIG_MEDIA_USB_SUPPORT is not set
+CONFIG_MEDIA_SUPPORT_FILTER=y
+CONFIG_MEDIA_CAMERA_SUPPORT=y
+CONFIG_MEDIA_PLATFORM_SUPPORT=y
+
+# Keep framebuffer/media/audio frameworks required by PL profiles. These are
+# concrete display engines for unrelated GPUs and SoCs, not generic GPU APIs.
+# CONFIG_DRM_NOUVEAU is not set
+# CONFIG_DRM_MSM is not set
+# CONFIG_DRM_VC4 is not set
+# CONFIG_DRM_V3D is not set
+# CONFIG_DRM_EXYNOS is not set
+# CONFIG_DRM_ROCKCHIP is not set
+# CONFIG_DRM_OMAP is not set
+# CONFIG_DRM_TEGRA is not set
+# CONFIG_DRM_STI is not set
+# CONFIG_DRM_ETNAVIV is not set
+# CONFIG_DRM_LIMA is not set
+# CONFIG_DRM_PANFROST is not set
+# CONFIG_DRM_ATMEL_HLCDC is not set
+# CONFIG_DRM_FSL_DCU is not set
+# CONFIG_DRM_PL111 is not set
+
+# Concrete MAC and USB-controller IP belonging to unrelated SoCs. Keep the
+# Cadence PS MAC, Xilinx PL MACs, PHY/MDIO, DSA and USB network classes.
+# CONFIG_BCMGENET is not set
+# CONFIG_SYSTEMPORT is not set
+# CONFIG_FTGMAC100 is not set
+# CONFIG_LAN966X_SWITCH is not set
+# CONFIG_USB_MUSB_HDRC is not set

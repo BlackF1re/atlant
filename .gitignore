@@ -1,0 +1,15 @@
+# Generated build state and release artifacts.
+out/
+work/
+logs/
+releases/
+artifacts/
+*.img
+*.img.xz
+*.zst
+SHA256SUMS
+
+# Published project documentation is tracked; local installation overrides are not.
+!README.md
+!docs/*.md
+config/local.env

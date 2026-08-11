@@ -1,0 +1,15 @@
+[Unit]
+Description=AtlANTian FPGA status LED profile
+After=systemd-modules-load.service local-fs.target sysinit.target
+Before=multi-user.target
+ConditionPathExists=/sys/class/fpga_manager/fpga0
+ConditionPathExists=!/run/atlantian-update-leds.lock
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/atlantian-fpga-status-leds
+RemainAfterExit=yes
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

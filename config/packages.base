@@ -1,0 +1,41 @@
+# Common AtlANTian userspace for both SD and NAND. Preserve the useful
+# engineering/diagnostic surface in both storage modes; the NAND capacity gate,
+# not guesswork, decides whether further trimming is actually necessary.
+openssh-server
+systemd-sysv
+dbus
+dbus-daemon
+ca-certificates
+systemd-timesyncd
+systemd-resolved
+iproute2
+iputils-ping
+ethtool
+nftables
+curl
+jq
+pigz
+zstd
+less
+nano
+gpiod
+i2c-tools
+spi-tools
+can-utils
+lm-sensors
+libiio-utils
+alsa-utils
+v4l-utils
+usbutils
+mtd-utils
+device-tree-compiler
+kmod
+file
+procps
+htop
+zram-tools
+util-linux
+tzdata
+fdisk
+e2fsprogs
+rsync

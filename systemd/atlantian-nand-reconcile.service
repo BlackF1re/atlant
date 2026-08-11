@@ -1,0 +1,15 @@
+[Unit]
+Description=Finish AtlANTian NAND upper rebase after immutable-base upgrade
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/var/lib/atlantian/nand/reconcile-release
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/atlantian-nand-reconcile
+TimeoutStartSec=30min
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

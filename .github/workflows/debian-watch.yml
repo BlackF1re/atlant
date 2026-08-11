@@ -1,0 +1,78 @@
+name: Debian Base Watch
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+      timezone: 'Asia/Tomsk'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: atlantian-debian-watch
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Refresh Debian base
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Refresh Debian snapshot
+        id: debian
+        run: bash scripts/refresh-debian-base.sh
+
+      - name: Validate snapshot
+        if: steps.debian.outputs.changed == 'true'
+        run: bash scripts/validate-release-inputs.sh
+
+      - name: Report Debian major availability
+        if: steps.debian.outputs.major_available == 'true'
+        run: |
+          {
+            echo '## Debian major release available'
+            echo
+            echo 'Debian ${{ steps.debian.outputs.candidate_major }} (${{ steps.debian.outputs.candidate_codename }}) is available.'
+            echo 'AtlANTian will remain on the configured Debian generation until an explicit release-line transition is made.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit snapshot
+        if: steps.debian.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          . config/release.env
+          git config user.name github-actions
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add debian-release.sha256 debian-updates-release.sha256 debian-security-release.sha256 \
+            config/debian-snapshot.env
+          git commit -m "chore(debian): refresh ${DEBIAN_CODENAME} snapshot"
+          git push origin main
+          # GITHUB_TOKEN pushes do not recursively trigger push workflows. A
+          # routine Debian refresh validates the current release but never
+          # publishes or increments its semantic version.
+          gh workflow run build-release.yml --ref main -f publish=false
+
+      # GitHub can disable scheduled workflows after prolonged public-repository
+      # inactivity. Refresh repository activity only when the source tree itself
+      # has been quiet for 45 days; no tracked heartbeat state is needed.
+      - name: Keep schedule active
+        if: steps.debian.outputs.changed != 'true'
+        run: |
+          set -euo pipefail
+          now=$(date -u +%s)
+          last=$(git log -1 --format=%ct)
+          (( now - last >= 45 * 86400 )) || exit 0
+          git config user.name github-actions
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit --allow-empty -m 'chore: keep Debian watcher active'
+          git push origin main

@@ -1,0 +1,27 @@
+version: 2
+
+# Debian owns userspace package maintenance; Dependabot owns only GitHub Actions
+# infrastructure. Updates are checked daily, grouped, pinned to immutable commit
+# SHAs by Dependabot, validated by PR CI, and merged only by the trusted
+# workflow_run gate when the change is strictly pin-only.
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "main"
+    schedule:
+      interval: "daily"
+      time: "11:17"
+      timezone: "Asia/Tomsk"
+    open-pull-requests-limit: 1
+    rebase-strategy: "auto"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      github-actions:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
+      github-actions-security:
+        applies-to: "security-updates"
+        patterns:
+          - "*"

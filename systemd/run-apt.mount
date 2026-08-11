@@ -1,0 +1,12 @@
+[Unit]
+Description=AtlANTian volatile APT workspace
+Before=systemd-tmpfiles-setup.service
+
+[Mount]
+What=tmpfs
+Where=/run/apt
+Type=tmpfs
+Options=rw,nosuid,nodev,noexec,noatime,mode=0755,size=50%
+
+[Install]
+WantedBy=local-fs.target

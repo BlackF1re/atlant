@@ -1,0 +1,13 @@
+[Unit]
+Description=Continue a verified AtlANTian NAND installation after SD U-Boot staging
+After=local-fs.target
+ConditionPathExists=/var/lib/atlantian/nand-install/pending
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/atlantian-nand-install --resume-auto
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

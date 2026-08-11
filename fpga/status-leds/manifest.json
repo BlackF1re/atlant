@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "name": "atlantian-status-leds",
+  "version": "1.0.0",
+  "board": ["Bitmain Antminer S9 control board"],
+  "fpga_part": "xc7z010clg400-1",
+  "bitstream": "atlantian-status-leds.bin",
+  "hardware_handoff": "atlantian-status-leds.hwh",
+  "device_tree_overlay": "atlantian-status-leds.dtbo",
+  "axi": {
+    "compatible": "xlnx,xps-gpio-1.00.a",
+    "base_address": "0x7fff8000",
+    "span": "0x8000"
+  },
+  "pins": {
+    "d5": { "package_pin": "M19", "gpio_bit": 2, "active_low": true },
+    "d6": { "package_pin": "M17", "gpio_bit": 3, "active_low": true },
+    "d7": { "package_pin": "F16", "gpio_bit": 0, "active_low": true },
+    "d8": { "package_pin": "L19", "gpio_bit": 1, "active_low": true }
+  },
+  "reset_state": "all LEDs off",
+  "conflicts": [],
+  "merge_contract": "Retain the plLED AXI GPIO, its 0x7fff8000 mapping and all four XDC assignments when integrating this block into a future full bitstream.",
+  "sha256": {
+    "atlantian-status-leds.bit": "9320a476d34d6c2515249d38b934253eec1af39403eff37467e70c6290e72ad6",
+    "atlantian-status-leds.bin": "0c32a7cccae73b527972fd0b49c3870d1f62019d3ad347a37674e72bf60ab5b0",
+    "atlantian-status-leds.dtbo": "0c0a72211c1f142f4f694525715b2b3cb1fae1986d4ef701ca725269fa3f0735"
+  }
+}

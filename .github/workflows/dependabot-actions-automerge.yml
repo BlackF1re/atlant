@@ -1,0 +1,75 @@
+name: Dependabot Auto-merge
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: atlantian-dependabot-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
+  cancel-in-progress: true
+
+jobs:
+  merge:
+    name: Merge trusted update
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Validate and merge Dependabot update
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pr=$(jq -r '.workflow_run.pull_requests[0].number // empty' "$GITHUB_EVENT_PATH")
+          tested_head=$(jq -r '.workflow_run.pull_requests[0].head.sha // empty' "$GITHUB_EVENT_PATH")
+          if [[ -z "$pr" || -z "$tested_head" ]]; then
+            echo 'No auditable pull request is attached to this CI run; nothing to merge.'
+            exit 0
+          fi
+
+          meta=$(mktemp)
+          files=$(mktemp)
+          policy=$(mktemp)
+          trap 'rm -f "$meta" "$files" "$policy"' EXIT
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" > "$meta"
+
+          [[ $(jq -r '.state' "$meta") == open ]] || exit 0
+          [[ $(jq -r '.user.login' "$meta") == 'dependabot[bot]' ]] || exit 0
+          [[ $(jq -r '.base.ref' "$meta") == main ]] || exit 0
+          [[ $(jq -r '.head.repo.full_name' "$meta") == "$GITHUB_REPOSITORY" ]] || exit 0
+
+          current_head=$(jq -r '.head.sha' "$meta")
+          if [[ "$current_head" != "$tested_head" ]]; then
+            echo "Dependabot head moved after CI: tested=$tested_head current=$current_head; waiting for fresh CI."
+            exit 0
+          fi
+
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$pr/files?per_page=100" > "$files"
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/scripts/actions-policy.py?ref=main" \
+            --jq '.content' | tr -d '\n' | base64 -d > "$policy"
+          python3 "$policy" dependabot-files "$files"
+
+          result=$(gh api -X PUT "repos/$GITHUB_REPOSITORY/pulls/$pr/merge" \
+            -f merge_method=squash \
+            -f sha="$current_head")
+          if [[ $(jq -r '.merged' <<<"$result") != true ]]; then
+            jq . <<<"$result" >&2
+            exit 1
+          fi
+
+          echo "Merged trusted Dependabot Actions PR #$pr."
+
+          # GITHUB_TOKEN merges do not trigger push workflows. Exercise the
+          # updated production workflow once without publishing a release.
+          gh workflow run build-release.yml --ref main -f publish=false

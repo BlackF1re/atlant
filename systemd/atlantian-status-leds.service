@@ -1,0 +1,20 @@
+[Unit]
+Description=AtlANTian D3 CPU heartbeat and SD activity indicators
+After=local-fs.target sysinit.target
+ConditionPathExists=/sys/class/leds/atlantian:red:status/brightness
+ConditionPathExists=!/run/atlantian-update-leds.lock
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/atlantian-status-leds
+Restart=always
+RestartSec=1
+Nice=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/sys/class/leds/atlantian:red:status /sys/class/leds/atlantian:green:activity
+
+[Install]
+WantedBy=multi-user.target

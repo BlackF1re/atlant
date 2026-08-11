@@ -1,0 +1,4 @@
+# NAND-only addition. The normal userspace comes from packages.base so SD and
+# NAND expose the same Debian/board functionality. busybox-static is retained
+# for the deterministic early NAND initramfs and emergency shell.
+busybox-static
