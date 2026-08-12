@@ -16,7 +16,8 @@ on:
   push:
     branches: [main]
     paths:
-      - '.github/workflows/build-release.yml'
+      # Workflow-only maintenance is intentionally excluded: changing this file
+      # must not spend a full release build. Source/build inputs still trigger it.
       - 'board/**'
       - 'config/**'
       - 'debian-*.sha256'
@@ -28,24 +29,32 @@ on:
 permissions:
   contents: read
 
-# Relevant main pushes and Debian snapshot refreshes publish automatically.
-# A newer run cancels an older one before it can waste more build time or
-# publish a superseded main revision.
+# Build/test and publication are separate jobs. A successful build stores a
+# SHA-specific verified artifact before publication starts, so a publication
+# failure cannot discard expensive caches or force a rebuild on retry.
 concurrency:
   group: atlantian-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  release:
-    name: Build release
+  plan:
+    name: Plan release
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 10
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      actions: read
+      contents: read
     env:
       ATLANTIAN_GITHUB_REPO: ${{ github.repository }}
+    outputs:
+      publish_requested: ${{ steps.plan.outputs.publish_requested }}
+      build_required: ${{ steps.plan.outputs.build_required }}
+      already_published: ${{ steps.plan.outputs.already_published }}
+      reuse_run_id: ${{ steps.plan.outputs.reuse_run_id }}
+      artifact_name: ${{ steps.plan.outputs.artifact_name }}
+      version: ${{ steps.auto_version.outputs.version }}
+      patch: ${{ steps.auto_version.outputs.patch }}
+      prerelease: ${{ steps.auto_version.outputs.prerelease }}
     steps:
       - name: Checkout
         # v7.0.1
@@ -59,15 +68,100 @@ jobs:
         shell: bash
         run: bash scripts/resolve-release-version.sh "$GITHUB_SHA"
 
+      - name: Find reusable verified build
+        id: plan
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_REQUESTED: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.publish || inputs.origin == 'debian-watch')) }}
+        run: |
+          set -euo pipefail
+          . config/release.env
+
+          artifact_name="atlantian-verified-${GITHUB_SHA}"
+          build_required=true
+          already_published=false
+          reuse_run_id=""
+
+          if [[ "$PUBLISH_REQUESTED" == true ]]; then
+            release_tag="v$ATLANTIAN_VERSION"
+            tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$release_tag" --jq .sha 2>/dev/null) || tag_commit=""
+
+            if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+              && [[ "$tag_commit" = "$GITHUB_SHA" ]]; then
+              already_published=true
+              build_required=false
+              echo "Release $release_tag already exists for this exact source; no build or upload is necessary."
+            else
+              reuse_run_id=$(
+                gh api --method GET "repos/$GITHUB_REPOSITORY/actions/artifacts" \
+                  -f name="$artifact_name" \
+                  -f per_page=100 \
+                  --jq '[.artifacts[] | select(.expired == false and .workflow_run.head_sha == env.GITHUB_SHA)] | sort_by(.created_at) | last | .workflow_run.id // empty'
+              )
+              if [[ -n "$reuse_run_id" ]]; then
+                build_required=false
+                echo "Reusing verified artifact $artifact_name from workflow run $reuse_run_id."
+              else
+                echo "No reusable verified artifact exists for $GITHUB_SHA; a full build is required."
+              fi
+            fi
+          fi
+
+          {
+            echo "publish_requested=$PUBLISH_REQUESTED"
+            echo "build_required=$build_required"
+            echo "already_published=$already_published"
+            echo "reuse_run_id=$reuse_run_id"
+            echo "artifact_name=$artifact_name"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo '## AtlANTian release plan'
+            echo
+            echo '| Item | Value |'
+            echo '|---|---|'
+            echo "| Version | $ATLANTIAN_VERSION |"
+            echo "| Publish requested | $PUBLISH_REQUESTED |"
+            echo "| Build required | $build_required |"
+            echo "| Already published | $already_published |"
+            echo "| Reusable workflow run | ${reuse_run_id:-none} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build and verify
+    needs: plan
+    if: needs.plan.outputs.build_required == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      ATLANTIAN_GITHUB_REPO: ${{ github.repository }}
+      ATLANTIAN_PATCH_OVERRIDE: ${{ needs.plan.outputs.patch }}
+      ATLANTIAN_PRERELEASE_OVERRIDE: ${{ needs.plan.outputs.prerelease }}
+    steps:
+      - name: Checkout
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: Prepare release identity
         id: identity
         shell: bash
+        env:
+          EXPECTED_VERSION: ${{ needs.plan.outputs.version }}
         run: |
           set -euo pipefail
           export ATLANTIAN_SOURCE_REVISION
           ATLANTIAN_SOURCE_REVISION=$(git rev-parse --short=12 "$GITHUB_SHA")
           . config/release.env
           . config/u-boot.env
+          test "$ATLANTIAN_VERSION" = "$EXPECTED_VERSION"
           {
             echo "ATLANTIAN_SOURCE_REVISION=$ATLANTIAN_SOURCE_REVISION"
             echo "ATLANTIAN_SOURCE_ID=$ATLANTIAN_SOURCE_ID"
@@ -83,46 +177,6 @@ jobs:
             echo "kernel_commit=$ATLANTIAN_KERNEL_COMMIT"
             echo "kernel_localversion=$ATLANTIAN_KERNEL_LOCALVERSION"
             echo "uboot_commit=$ATLANTIAN_UBOOT_COMMIT"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Check release state
-        id: release_state
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.publish || inputs.origin == 'debian-watch'))
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          # Resolve repository state through the authenticated GitHub API. The
-          # checkout deliberately does not persist Git credentials, so this also
-          # works when a fresh target repository is private.
-          tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha 2>/dev/null) || tag_commit=""
-
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            if [[ "$tag_commit" = "$GITHUB_SHA" ]]; then
-              state=published-current
-              echo "Release $RELEASE_TAG already exists for this exact source revision; publication is an idempotent reconciliation."
-            else
-              state=published-other
-              echo "Release $RELEASE_TAG already exists for another source revision (${tag_commit:-unknown})."
-              echo 'The build will still be fully validated, but the published release will remain unchanged.'
-            fi
-          elif [[ -n "$tag_commit" ]]; then
-            if [[ "$tag_commit" = "$GITHUB_SHA" ]]; then
-              state=tag-current
-              echo "Unattached tag $RELEASE_TAG already identifies this source revision."
-            else
-              state=tag-other
-              echo "Unattached tag $RELEASE_TAG points to $tag_commit."
-              echo 'It may be retargeted only after every build and publication gate passes.'
-            fi
-          else
-            state=unpublished
-            echo "No existing release state for $RELEASE_TAG; this is a clean publication."
-          fi
-
-          {
-            echo "state=$state"
-            echo "tag_commit=$tag_commit"
           } >> "$GITHUB_OUTPUT"
 
       - name: Validate source contracts
@@ -262,64 +316,30 @@ jobs:
         id: source_integrity
         run: git diff --exit-code
 
-      - name: Check publication eligibility
-        id: publication
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PUBLISH_REQUESTED: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.publish || inputs.origin == 'debian-watch')) }}
-          RELEASE_STATE: ${{ steps.release_state.outputs.state }}
+      - name: Seal verified artifact
+        id: seal
         run: |
           set -euo pipefail
-          if [[ "$PUBLISH_REQUESTED" != true ]]; then
-            echo 'publish=false' >> "$GITHUB_OUTPUT"
-            echo 'Validation-only run: release publication is disabled.' >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          if [[ "$RELEASE_STATE" = published-other ]]; then
-            echo 'publish=false' >> "$GITHUB_OUTPUT"
-            echo "Release $RELEASE_TAG is already published from another source revision; treating this publish request as an idempotent no-op." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          main_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
-          if [[ "$main_sha" = "$GITHUB_SHA" ]]; then
-            echo 'publish=true' >> "$GITHUB_OUTPUT"
-            echo 'This build is still the main branch tip and may publish or reconcile its release.' >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo 'publish=false' >> "$GITHUB_OUTPUT"
-            echo 'This build was superseded by a newer main commit; publication is skipped.' >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Generate release notes
-        if: steps.publication.outputs.publish == 'true'
-        run: bash scripts/generate-release-notes.sh "$RELEASE_TAG" "$GITHUB_SHA"
-
-      - name: Verify publication payload
-        if: steps.publication.outputs.publish == 'true'
-        run: |
-          set -euo pipefail
-          test "$RELEASE_TAG" = "v$ATLANTIAN_VERSION"
-          test -s "artifacts/current/$ATLANTIAN_IMAGE_NAME.img"
-          test -s "artifacts/current/atlantian-nand-$ATLANTIAN_VERSION.tar.zst"
-          test "$(find artifacts/current -maxdepth 1 -name '*.img' -type f | wc -l)" -eq 1
-          test "$(find artifacts/current -maxdepth 1 -name '*.deb' -type f | wc -l)" -eq 3
+          printf '%s\n' "$GITHUB_SHA" > artifacts/current/VERIFIED-SOURCE-SHA
+          printf '%s\n' "$ATLANTIAN_VERSION" > artifacts/current/VERIFIED-VERSION
           (cd artifacts/current && sha256sum -c SHA256SUMS)
 
-      - name: Attest build provenance
+      - name: Attest verified build
         id: attestation
-        if: steps.publication.outputs.publish == 'true' || (github.event_name == 'workflow_dispatch' && inputs.publish == false)
         # v4.2.2
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-checksums: artifacts/current/SHA256SUMS
 
-      - name: Upload release artifact
-        if: steps.publication.outputs.publish == 'true'
+      - name: Upload verified artifact
+        id: verified_artifact
         # v7.0.1
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: atlantian-${{ env.ATLANTIAN_VERSION }}
+          name: ${{ needs.plan.outputs.artifact_name }}
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
           path: |
             artifacts/current/*.img
             artifacts/current/*.tar.zst
@@ -328,6 +348,163 @@ jobs:
             artifacts/current/*.snapshot.txt
             artifacts/current/RELEASE-METADATA.json
             artifacts/current/SHA256SUMS
+            artifacts/current/VERIFIED-SOURCE-SHA
+            artifacts/current/VERIFIED-VERSION
+
+      - name: Write build summary
+        if: always()
+        run: |
+          {
+            echo '## AtlANTian verified build'
+            echo
+            echo '| Stage | Outcome |'
+            echo '|---|---|'
+            echo '| Source contracts | ${{ steps.preflight.outcome }} |'
+            echo '| Release inputs | ${{ steps.inputs.outcome }} |'
+            echo '| Dependencies | ${{ steps.dependencies.outcome }} |'
+            echo '| Debian package cache | ${{ steps.debootstrap_cache.outputs.cache-hit }} |'
+            echo '| Linux build cache | ${{ steps.kernel_cache.outputs.cache-hit }} |'
+            echo '| U-Boot source cache | ${{ steps.uboot_cache.outputs.cache-hit }} |'
+            echo '| Root filesystems | ${{ steps.rootfs.outcome }} |'
+            echo '| Linux kernel | ${{ steps.kernel.outcome }} |'
+            echo '| Release artifacts | ${{ steps.artifacts.outcome }} |'
+            echo '| Artifact validation | ${{ steps.artifact_check.outcome }} |'
+            echo '| SD image layout | ${{ steps.image_check.outcome }} |'
+            echo '| NAND bundle | ${{ steps.nand_check.outcome }} |'
+            echo '| SD upgrade | ${{ steps.sd_upgrade.outcome }} |'
+            echo '| NAND rebase | ${{ steps.nand_rebase.outcome }} |'
+            echo '| Source tree integrity | ${{ steps.source_integrity.outcome }} |'
+            echo '| Provenance attestation | ${{ steps.attestation.outcome }} |'
+            echo '| Verified artifact upload | ${{ steps.verified_artifact.outcome }} |'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish release
+    needs: [plan, build]
+    if: >-
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.plan.outputs.publish_requested == 'true' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: write
+    env:
+      ATLANTIAN_GITHUB_REPO: ${{ github.repository }}
+      ATLANTIAN_PATCH_OVERRIDE: ${{ needs.plan.outputs.patch }}
+      ATLANTIAN_PRERELEASE_OVERRIDE: ${{ needs.plan.outputs.prerelease }}
+    steps:
+      - name: Checkout
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare release identity
+        id: identity
+        shell: bash
+        env:
+          EXPECTED_VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          export ATLANTIAN_SOURCE_REVISION
+          ATLANTIAN_SOURCE_REVISION=$(git rev-parse --short=12 "$GITHUB_SHA")
+          . config/release.env
+          test "$ATLANTIAN_VERSION" = "$EXPECTED_VERSION"
+          {
+            echo "ATLANTIAN_SOURCE_REVISION=$ATLANTIAN_SOURCE_REVISION"
+            echo "ATLANTIAN_SOURCE_ID=$ATLANTIAN_SOURCE_ID"
+            echo "ATLANTIAN_VERSION=$ATLANTIAN_VERSION"
+            echo "ATLANTIAN_DEB_VERSION=$ATLANTIAN_DEB_VERSION"
+            echo "ATLANTIAN_PRERELEASE=$ATLANTIAN_PRERELEASE"
+            echo "ATLANTIAN_RELEASE_ID=$ATLANTIAN_RELEASE_ID"
+            echo "ATLANTIAN_IMAGE_NAME=$ATLANTIAN_IMAGE_NAME"
+            echo "RELEASE_TAG=v$ATLANTIAN_VERSION"
+          } >> "$GITHUB_ENV"
+
+      - name: Check publication eligibility
+        id: publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ALREADY_PUBLISHED: ${{ needs.plan.outputs.already_published }}
+        run: |
+          set -euo pipefail
+
+          tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha 2>/dev/null) || tag_commit=""
+
+          if [[ "$ALREADY_PUBLISHED" = true ]]; then
+            if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+              && [[ "$tag_commit" = "$GITHUB_SHA" ]]; then
+              echo 'publish=false' >> "$GITHUB_OUTPUT"
+              echo "Release $RELEASE_TAG is already complete for this exact source; idempotent no-op." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "Previously detected release $RELEASE_TAG disappeared or moved; refusing to publish without a verified artifact." >&2
+            exit 1
+          fi
+
+          main_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [[ "$main_sha" != "$GITHUB_SHA" ]]; then
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+            echo 'This build was superseded by a newer main commit; publication is skipped.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [[ "$tag_commit" = "$GITHUB_SHA" ]]; then
+              echo 'publish=false' >> "$GITHUB_OUTPUT"
+              echo "Release $RELEASE_TAG appeared concurrently for this exact source; idempotent no-op." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "Release $RELEASE_TAG belongs to another source revision (${tag_commit:-unknown}); refusing to overwrite it." >&2
+            exit 1
+          fi
+
+          if [[ -n "$tag_commit" && "$tag_commit" != "$GITHUB_SHA" ]]; then
+            echo "Tag $RELEASE_TAG already points to $tag_commit; automatic publication will never retarget an existing tag." >&2
+            exit 1
+          fi
+
+          echo 'publish=true' >> "$GITHUB_OUTPUT"
+          echo 'Current main revision is eligible for publication.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Download verified artifact
+        id: artifact_source
+        if: steps.publication.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REUSE_RUN_ID: ${{ needs.plan.outputs.reuse_run_id }}
+          ARTIFACT_NAME: ${{ needs.plan.outputs.artifact_name }}
+        run: |
+          set -euo pipefail
+          source_run=${REUSE_RUN_ID:-$GITHUB_RUN_ID}
+          rm -rf artifacts/current
+          mkdir -p artifacts/current
+          gh run download "$source_run" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$ARTIFACT_NAME" \
+            --dir artifacts/current
+          echo "run_id=$source_run" >> "$GITHUB_OUTPUT"
+
+      - name: Verify publication payload
+        if: steps.publication.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          test "$(cat artifacts/current/VERIFIED-SOURCE-SHA)" = "$GITHUB_SHA"
+          test "$(cat artifacts/current/VERIFIED-VERSION)" = "$ATLANTIAN_VERSION"
+          test "$RELEASE_TAG" = "v$ATLANTIAN_VERSION"
+          test -s "artifacts/current/$ATLANTIAN_IMAGE_NAME.img"
+          test -s "artifacts/current/atlantian-nand-$ATLANTIAN_VERSION.tar.zst"
+          test "$(find artifacts/current -maxdepth 1 -name '*.img' -type f | wc -l)" -eq 1
+          test "$(find artifacts/current -maxdepth 1 -name '*.deb' -type f | wc -l)" -eq 3
+          (cd artifacts/current && sha256sum -c SHA256SUMS)
+
+      - name: Generate release notes
+        if: steps.publication.outputs.publish == 'true'
+        run: bash scripts/generate-release-notes.sh "$RELEASE_TAG" "$GITHUB_SHA"
 
       - name: Publish GitHub release
         if: steps.publication.outputs.publish == 'true'
@@ -347,18 +524,16 @@ jobs:
 
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             if [[ "$tag_commit" = "$GITHUB_SHA" ]]; then
-              echo "Release $RELEASE_TAG already exists for this source; reconciling canonical assets."
-              gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber "${release_assets[@]}"
-            else
-              echo "Release $RELEASE_TAG was published from another source revision while this build was running; leaving it unchanged."
+              echo "Release $RELEASE_TAG appeared concurrently for this source; nothing remains to publish."
+              exit 0
             fi
-            exit 0
+            echo "Release $RELEASE_TAG appeared for another source revision; refusing to overwrite it." >&2
+            exit 1
           fi
 
           if [[ -n "$tag_commit" && "$tag_commit" != "$GITHUB_SHA" ]]; then
-            echo "Retargeting unattached release tag $RELEASE_TAG: $tag_commit -> $GITHUB_SHA"
-            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$RELEASE_TAG" \
-              -f sha="$GITHUB_SHA" -F force=true >/dev/null
+            echo "Tag $RELEASE_TAG moved to $tag_commit; refusing to retarget it." >&2
+            exit 1
           fi
 
           prerelease=()
@@ -373,43 +548,27 @@ jobs:
             --notes-file release-notes.md \
             "${prerelease[@]}" \
             "${release_assets[@]}"; then
-            # A concurrent publisher may have won the race after our last check.
             if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha 2>/dev/null) || tag_commit=""
               if [[ "$tag_commit" = "$GITHUB_SHA" ]]; then
-                echo "Release $RELEASE_TAG appeared concurrently for this source; reconciling canonical assets."
-                gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber "${release_assets[@]}"
+                echo "Release $RELEASE_TAG appeared concurrently for this source; treating publication as successful."
                 exit 0
               fi
             fi
             exit 1
           fi
 
-      - name: Write workflow summary
+      - name: Write publication summary
         if: always()
         run: |
           {
-            echo '## AtlANTian build & release'
+            echo '## AtlANTian publication'
             echo
-            echo '| Stage | Outcome |'
+            echo '| Item | Value |'
             echo '|---|---|'
-            echo '| Automatic version | ${{ steps.auto_version.outputs.version }} |'
-            echo '| Release state | ${{ steps.release_state.outputs.state }} |'
-            echo '| Source contracts | ${{ steps.preflight.outcome }} |'
-            echo '| Release inputs | ${{ steps.inputs.outcome }} |'
-            echo '| Dependencies | ${{ steps.dependencies.outcome }} |'
-            echo '| Debian package cache | ${{ steps.debootstrap_cache.outputs.cache-hit }} |'
-            echo '| Linux build cache | ${{ steps.kernel_cache.outputs.cache-hit }} |'
-            echo '| U-Boot source cache | ${{ steps.uboot_cache.outputs.cache-hit }} |'
-            echo '| Root filesystems | ${{ steps.rootfs.outcome }} |'
-            echo '| Linux kernel | ${{ steps.kernel.outcome }} |'
-            echo '| Release artifacts | ${{ steps.artifacts.outcome }} |'
-            echo '| Artifact validation | ${{ steps.artifact_check.outcome }} |'
-            echo '| SD image layout | ${{ steps.image_check.outcome }} |'
-            echo '| NAND bundle | ${{ steps.nand_check.outcome }} |'
-            echo '| SD upgrade | ${{ steps.sd_upgrade.outcome }} |'
-            echo '| NAND rebase | ${{ steps.nand_rebase.outcome }} |'
-            echo '| Source tree integrity | ${{ steps.source_integrity.outcome }} |'
-            echo '| Provenance attestation | ${{ steps.attestation.outcome }} |'
+            echo '| Version | ${{ needs.plan.outputs.version }} |'
+            echo '| Build job | ${{ needs.build.result }} |'
+            echo '| Reused workflow run | ${{ needs.plan.outputs.reuse_run_id || 'none' }} |'
+            echo '| Artifact source run | ${{ steps.artifact_source.outputs.run_id || 'none' }} |'
             echo '| Publication eligible | ${{ steps.publication.outputs.publish }} |'
           } >> "$GITHUB_STEP_SUMMARY"
