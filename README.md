@@ -1,6 +1,6 @@
 # AtlANTian GNU/Linux
 
-[![License: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0--only-blue.svg)](LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/BlackF1re/atlant?include_prereleases&sort=semver&label=release)](https://github.com/BlackF1re/atlant/releases) [![Build](https://github.com/BlackF1re/atlant/actions/workflows/build-release.yml/badge.svg?branch=main)](https://github.com/BlackF1re/atlant/actions/workflows/build-release.yml) [![Release Date](https://img.shields.io/github/release-date-pre/BlackF1re/atlant?display_date=published_at&label=released)](https://github.com/BlackF1re/atlant/releases) [![Debian Snapshot](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2FBlackF1re%2Fatlant%2Frefs%2Fheads%2Fmain%2Fconfig%2Fdebian-snapshot.env&search=DEBIAN_SNAPSHOT_TIMESTAMP%3D(%5Cd%7B4%7D)(%5Cd%7B2%7D)(%5Cd%7B2%7D)T%5Cd%7B6%7DZ&replace=%241-%242-%243&label=Debian%20snapshot)](https://github.com/BlackF1re/atlant/blob/main/config/debian-snapshot.env) [![Downloads](https://img.shields.io/github/downloads/BlackF1re/atlant/total?label=downloads)](https://github.com/BlackF1re/atlant/releases)
 
 **AtlANTian** is a compact Debian-based GNU/Linux distribution for the Bitmain
 Antminer S9 control board. It turns the Xilinx Zynq-7010 platform into a
