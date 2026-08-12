@@ -1,100 +1,106 @@
 # AtlANTian GNU/Linux
 
-[![Latest Release](https://img.shields.io/github/v/release/BlackF1re/atlant?include_prereleases&sort=semver&label=release)](https://github.com/BlackF1re/atlant/releases) [![Build](https://github.com/BlackF1re/atlant/actions/workflows/build-release.yml/badge.svg?branch=main)](https://github.com/BlackF1re/atlant/actions/workflows/build-release.yml) [![Release Date](https://img.shields.io/github/release-date-pre/BlackF1re/atlant?display_date=published_at&label=released)](https://github.com/BlackF1re/atlant/releases) [![Debian Snapshot](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2FBlackF1re%2Fatlant%2Frefs%2Fheads%2Fmain%2Fconfig%2Fdebian-snapshot.env&search=DEBIAN_SNAPSHOT_TIMESTAMP%3D(%5Cd%7B4%7D)(%5Cd%7B2%7D)(%5Cd%7B2%7D)T%5Cd%7B6%7DZ&replace=%241-%242-%243&label=Debian%20snapshot)](https://github.com/BlackF1re/atlant/blob/main/config/debian-snapshot.env) [![Downloads](https://img.shields.io/github/downloads/BlackF1re/atlant/total?label=downloads)](https://github.com/BlackF1re/atlant/releases)
+[![Latest Release](https://img.shields.io/github/v/release/BlackF1re/atlantian?include_prereleases&sort=semver&label=release)](https://github.com/BlackF1re/atlantian/releases) [![Build](https://github.com/BlackF1re/atlantian/actions/workflows/build-release.yml/badge.svg?branch=main)](https://github.com/BlackF1re/atlantian/actions/workflows/build-release.yml) [![Release Date](https://img.shields.io/github/release-date-pre/BlackF1re/atlantian?display_date=published_at&label=released)](https://github.com/BlackF1re/atlantian/releases) [![Debian Snapshot](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2FBlackF1re%2Fatlantian%2Frefs%2Fheads%2Fmain%2Fconfig%2Fdebian-snapshot.env&search=DEBIAN_SNAPSHOT_TIMESTAMP%3D(%5Cd%7B4%7D)(%5Cd%7B2%7D)(%5Cd%7B2%7D)T%5Cd%7B6%7DZ&replace=%241-%242-%243&label=Debian%20snapshot)](https://github.com/BlackF1re/atlantian/blob/main/config/debian-snapshot.env) [![Downloads](https://img.shields.io/github/downloads/BlackF1re/atlantian/total?label=downloads)](https://github.com/BlackF1re/atlantian/releases)
 
 **AtlANTian** is a compact Debian-based GNU/Linux distribution for the Bitmain
-Antminer S9 control board. It turns the Xilinx Zynq-7010 platform into a
-general-purpose Linux/FPGA system and supports microSD and the on-board 256 MiB
-raw NAND from **one ready-to-flash image**.
+Antminer S9 control board. It turns the Xilinx Zynq-7010 into a general-purpose
+Linux/FPGA system and provides one ready-to-flash image for both microSD use and
+optional installation to the on-board NAND.
 
-Generic Linux software sees a Debian system (`ID=debian`), while `PRETTY_NAME`,
-`VARIANT` and AtlANTian release metadata preserve the distribution identity.
-This keeps ordinary Debian tooling and third-party installers compatible without
-hiding that the running product is AtlANTian GNU/Linux.
+Generic Linux software sees a Debian system (`ID=debian`), while AtlANTian keeps
+its own visible OS and release identity. Standard APT packages and ordinary
+Debian tooling work normally.
 
-**Docs:** [Installation](docs/INSTALLATION.md) · [NAND](docs/NAND.md) ·
-[Upgrading](docs/UPGRADING.md) · [Hardware](docs/hardware-support-matrix.md) ·
-[Pipeline](docs/PIPELINE.md) · [all docs](docs/README.md)
+**Start here:** [Download latest release](https://github.com/BlackF1re/atlantian/releases/latest) ·
+[SD Quick Start](docs/QUICKSTART.md) · [Installation](docs/INSTALLATION.md) ·
+[NAND](docs/NAND.md) · [Hardware support](docs/hardware-support-matrix.md) ·
+[All docs](docs/README.md)
 
-## Release identity
+## Quick start
 
-AtlANTian versions intentionally include the Debian **major generation** while
-keeping AtlANTian's own release lifecycle independent:
+### What you need
 
-```text
-13.1.0-alpha.1
-│  │ │    └─ AtlANTian prerelease stage
-│  │ └────── AtlANTian patch
-│  └──────── AtlANTian release line
-└─────────── Debian major generation
-```
-
-Examples: `13.1.0-alpha.1` → `13.1.0-beta.1` → `13.1.0-rc.1` → `13.1.0` →
-`13.1.1` → `13.2.0`. A future Debian 14 line starts at `14.x.y`.
-
-Routine Debian package/security refreshes **do not change the AtlANTian release
-version**. The daily Debian watcher freezes the newest validated Snapshot for the
-configured Debian generation; its exact timestamp and the source Git revision are
-recorded separately as build metadata. A Debian-major transition is an explicit
-release-line change, never an automatic daily-watcher action.
-
-Debian packages use Debian-native prerelease ordering. For example, AtlANTian
-`13.1.0-alpha.1` is packaged as `13.1.0~alpha.1-1`, so `dpkg` correctly orders it
-before the eventual stable `13.1.0-1`.
-
-## Storage modes
-
-| Boot mode | Storage |
+| Item | Requirement |
 |---|---|
-| **SD** | FAT BOOT + writable ext4 ROOT; ROOT expands on first boot |
-| **NAND** | 16 MiB raw boot + 240 MiB UBI; SquashFS/Zstd read-only base + UBIFS/LZO writable upper |
+| Board | Bitmain Antminer S9 control board |
+| Storage | microSD; 4 GiB or larger is convenient |
+| Power | external 12 V board supply |
+| Network | Ethernet with DHCP |
+| Console | optional 3.3 V USB-UART, `115200 8N1` |
+| Files | latest `atlantian-<release>.img` and `SHA256SUMS` |
 
-The SD root embeds the checksummed NAND payload for the same release. NAND uses
-the same Debian package profile, but stores it as a compressed immutable base
-with writable OverlayFS state.
+> [!CAUTION]
+> UART uses **3.3 V logic**. Do not connect a 5 V UART adapter.
 
-NAND visible root:
+### Install to microSD
 
-```text
-SquashFS/Zstd lower
-        +
-UBIFS/LZO internal upper
-        OR token-authorized ext4 upper on the recovery microSD
-        ↓
-     OverlayFS /
-```
+1. Download the latest image and `SHA256SUMS` from
+   [Releases](https://github.com/BlackF1re/atlantian/releases).
+2. Verify the download:
 
-`atlantian-storage adopt` can use free space on the recovery SD without
-repartitioning or erasing it. Without the card, NAND falls back to its internal
-upper.
+   ```sh
+   sha256sum -c SHA256SUMS --ignore-missing
+   ```
 
-## Install
+3. Write the whole `.img` to the card with Rufus, Raspberry Pi Imager, Etcher or
+   `dd` in raw mode.
+4. Power off the board, select physical **SD** boot, insert the card and connect
+   Ethernet or UART.
+5. Apply 12 V and wait for automatic ROOT expansion and one reboot.
+6. Connect through DHCP or UART, log in as `root`, then set a password with
+   `passwd` before using an untrusted network.
 
-1. Verify `SHA256SUMS` and flash `atlantian-<release>.img`.
-2. Select physical **SD** boot and power the board.
-3. Wait for first-boot ROOT expansion and one reboot.
-4. Set a root password or SSH key before using an untrusted network.
+The initial root password is empty for provisioning. For Linux `dd` examples,
+first-boot checks and troubleshooting, see [SD Quick Start](docs/QUICKSTART.md).
 
-NAND installation is optional:
+## Supported hardware
+
+| Function | Status |
+|---|---|
+| Zynq-7010 / dual Cortex-A9 | Ready |
+| 512 MiB and 1 GiB DDR3 | Ready; detected automatically by U-Boot |
+| microSD boot | Ready; cold boot and reboot validated on both RAM variants |
+| Gigabit Ethernet | Ready; DHCP |
+| UART | Ready; `ttyPS0`, `115200 8N1` |
+| 256 MiB Micron NAND | Ready on 512 MiB board; 1 GiB cold NAND boot still needs dedicated validation |
+| FPGA | FPGA Manager/Region, configfs overlays and optional profiles |
+| LEDs, buttons, XADC, watchdog | Ready |
+| PS USB0 | Disabled because of a known MIO routing collision |
+| RTC | Not fitted |
+
+The complete implementation/validation matrix is in
+[Hardware support](docs/hardware-support-matrix.md).
+
+## SD or NAND
+
+The same release image supports both modes.
+
+| Mode | Use | Storage |
+|---|---|---|
+| **SD** | recommended first boot and normal development | FAT BOOT + writable ext4 ROOT; ROOT expands to the card |
+| **NAND** | optional internal installation | 16 MiB raw boot + 240 MiB UBI; read-only SquashFS base + writable UBIFS OverlayFS upper |
+
+To install the running SD release to NAND, keep the board in **SD** boot mode and
+run:
 
 ```sh
 atlantian-nand-install
 ```
 
-The installer verifies the board/NAND/ECC/payload, creates and verifies a raw+OOB
-factory backup, asks once for `INSTALL`, programs and twice read-back-verifies raw
-boot through SD U-Boot, writes/verifies UBI, then requests the physical **SD → NAND**
-boot-source handoff.
+The installer verifies the board, NAND/ECC and payload, creates and verifies a
+raw+OOB factory backup, programs and read-back-verifies NAND, then asks for the
+physical **SD → NAND** jumper handoff.
 
-Fresh destructive installation and cold boot from NAND through SPL → U-Boot →
-kernel/initramfs → UBI/SquashFS/UBIFS/OverlayFS → systemd have been physically
-validated on a 512 MiB board. Remaining hardware-validation items are tracked in
-the [hardware matrix](docs/hardware-support-matrix.md).
+NAND installation is destructive. Its verified factory backup is stored on the
+SD system under `/root/atlantian-factory-nand-backup`; copy it elsewhere if you
+may need factory restore.
+
+For NAND layout, ECC, recovery and persistence details, see [NAND](docs/NAND.md)
+and [Installation](docs/INSTALLATION.md).
 
 ## Packages and updates
 
-SD and NAND use the same useful Debian/engineering userspace. Normal packages use
-standard Debian repositories pinned to the installed codename:
+AtlANTian is a normal Debian-compatible userspace:
 
 ```sh
 apt update
@@ -102,68 +108,96 @@ apt upgrade
 apt install git python3 tmux
 ```
 
+AtlANTian system updates use:
+
+```sh
+atlantian-sysupgrade --check
+atlantian-sysupgrade --notes
+atlantian-sysupgrade
+```
+
 | Operation | SD | NAND |
 |---|---|---|
 | Debian packages | normal APT | normal APT into the active upper |
-| AtlANTian base/kernel/boot | `atlantian-sysupgrade` | `atlantian-sysupgrade` stages the verified NAND bundle on the paired recovery SD, then maintenance continues from SD |
-| Debian-major transition | staged updater | clean NAND reinstall |
+| AtlANTian base/kernel/boot | `atlantian-sysupgrade` | stages the verified bundle on the paired recovery SD and continues maintenance from SD |
+| Debian-major transition | explicit AtlANTian release-line transition | clean NAND reinstall |
 
-Same-major NAND base upgrades write the target immutable base and rebase selected
-persistent state/package intent instead of copying a complete writable upper. See
-[Upgrading](docs/UPGRADING.md).
+See [Upgrading](docs/UPGRADING.md) for the full update model.
 
-## Platform
+## FPGA
 
-| Function | Status/policy |
-|---|---|
-| SoC | Xilinx Zynq-7010, dual Cortex-A9 + programmable logic |
-| RAM | 512 MiB or 1 GiB DDR3, detected by U-Boot; no fixed Linux `mem=` cap |
-| Debian | configured stable generation; immutable Snapshot input for reproducible factory builds |
-| Kernel | pinned 6.12.y AtlANTian kernel with independent ABI revision and FPGA/NAND/UBI/SquashFS/UBIFS/OverlayFS support |
-| SD boot | source-built pinned U-Boot; physically validated on 512 MiB and 1 GiB boards |
-| NAND | 256 MiB Micron raw NAND; install and cold boot validated on 512 MiB, remaining gates tracked separately |
-| Boot source | physical SD/NAND selection jumper |
-| Ethernet / UART | Gigabit GEM/MACB + `ttyPS0` 115200 8N1 |
-| FPGA | FPGA Manager/Region + configfs DT overlays + optional profiles |
-
-NAND SPL uses a dedicated fixed-geometry reader for the supported Micron `2c:da`
-part. It validates on-die ECC, skips factory-bad eraseblocks and uses bounded
-ready waits instead of the full runtime NAND discovery path.
-
-## Build
-
-Clone the repository you intend to publish from, or use an archive that has been
-committed to a fresh repository, then run:
+Basic FPGA control is available from Linux:
 
 ```sh
+atlantian-fpga status
+atlantian-fpga apply <instance> <overlay.dtbo>
+atlantian-fpga remove <instance>
+```
+
+A DT overlay describes the hardware exposed to Linux; the matching FPGA
+bitstream must implement it. Shipped and planned interfaces are tracked in the
+[hardware matrix](docs/hardware-support-matrix.md).
+
+## Release model
+
+AtlANTian versions include the Debian major generation:
+
+```text
+13.1.0-alpha.3
+│  │ │    └─ prerelease stage
+│  │ └────── AtlANTian patch
+│  └──────── AtlANTian release line
+└─────────── Debian major generation
+```
+
+Typical progression: `13.1.0-alpha.N` → `13.1.0-beta.N` → `13.1.0-rc.N` →
+`13.1.0` → `13.1.1` → `13.2.0`. A Debian 14 line starts at `14.x.y`.
+
+Meaningful `main` changes and validated Debian Snapshot refreshes automatically
+build, test and publish the next release number. Documentation/workflow-only
+maintenance does not spend a full release build. Debian-major transitions remain
+explicit.
+
+Debian packages use native prerelease ordering, for example
+`13.1.0~alpha.3-1`. Every published release records its exact Debian Snapshot,
+source revision and publishing repository in release metadata. The Snapshot badge
+at the top reflects the current source tree.
+
+## Build from source
+
+```sh
+git clone https://github.com/BlackF1re/atlantian.git
 cd atlantian
 sudo bash scripts/bootstrap-host.sh
 bash scripts/validate-release-inputs.sh
 sudo -E bash scripts/build-incremental.sh all
 ```
 
-The build does not depend on repository shell scripts retaining executable mode
-bits, which makes a downloaded/re-uploaded source archive a supported bootstrap
-path.
+The release pipeline pins Debian, Linux and U-Boot inputs and validates image,
+NAND, upgrade and source-integrity contracts. A successful build stores a
+SHA-specific verified artifact before publication, so a publication retry can
+reuse the already-tested output instead of rebuilding it.
 
-CI pins Debian/Linux/U-Boot inputs, verifies image/NAND capacity and boot/update
-contracts, checks the embedded NAND bundle against the tested standalone bundle,
-and validates normal `main` changes without creating a semantic release.
-Publishing is an explicit manual action and is idempotent: existing repository
-release state is inspected rather than treated as an early build error; incomplete
-same-source publication can be reconciled, while an already published release
-from another source revision is left unchanged. A fresh repository with no tag or
-Release follows the clean first-publication path. See [Pipeline](docs/PIPELINE.md).
-CI cannot replace real-board validation of bad-block placement, power-loss
-recovery, extroot fallback or factory restore.
+See [Pipeline](docs/PIPELINE.md) for CI and reproducibility details.
 
 ## Hardware boundaries
 
 - `poweroff` halts Linux but cannot disconnect the external 12 V supply.
-- suspend/hibernate is not advertised as a validated recoverable state.
-- no battery-backed RTC is fitted.
-- PS USB0 stays disabled because of the known MIO collision.
-- raw+OOB NAND backups must not be restored with generic block-device `dd`.
+- Suspend/hibernate is not advertised as a validated recoverable state.
+- No battery-backed RTC is fitted.
+- PS USB0 remains disabled because of the known MIO collision.
+- Raw+OOB NAND backups must not be restored with generic block-device `dd`.
+
+## Documentation
+
+- [SD Quick Start](docs/QUICKSTART.md)
+- [Installation](docs/INSTALLATION.md)
+- [NAND and ECC](docs/NAND.md)
+- [Upgrading](docs/UPGRADING.md)
+- [Persistence](docs/PERSISTENCE.md)
+- [Hardware support matrix](docs/hardware-support-matrix.md)
+- [Build and release pipeline](docs/PIPELINE.md)
+- [Security](SECURITY.md)
 
 ## License
 
