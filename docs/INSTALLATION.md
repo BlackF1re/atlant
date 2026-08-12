@@ -6,78 +6,83 @@ AtlANTian publishes one ready-to-flash image:
 atlantian-<release>.img
 ```
 
-It is both the normal microSD system and the matching installer/recovery source
-for the on-board NAND. The physical boot-source jumper selects SD or NAND.
+It is the normal microSD system and the matching installer/recovery source for
+on-board NAND. The physical boot-source jumper selects which medium BootROM uses.
 
 ## Install to microSD
 
-1. Verify the download with `SHA256SUMS`.
-2. Flash the whole `.img` with Rufus, Raspberry Pi Imager, Etcher or `dd`.
-3. Select **SD** boot, insert the card and power the board.
-4. Wait for automatic ext4 ROOT expansion and one reboot.
-5. Set a root password or SSH key before using an untrusted network.
+1. Download the image and `SHA256SUMS` from the release page.
+2. Verify the image:
 
-AtlANTian is now a normal writable Debian-compatible system. Generic software
-sees `ID=debian`, while the human-facing OS identity remains AtlANTian GNU/Linux.
-NAND installation is optional.
+   ```sh
+   sha256sum -c SHA256SUMS --ignore-missing
+   ```
+
+3. Flash the whole `.img` with Rufus, Raspberry Pi Imager, Etcher or `dd`.
+4. Select physical **SD** boot, insert the card and power the board.
+5. Wait for automatic ext4 ROOT expansion and one reboot.
+6. Log in as `root` and set a password or SSH key before using an untrusted
+   network.
+
+The result is a normal writable Debian-compatible system. For exact flashing
+commands, provenance verification and first-boot checks, use
+[SD Quick Start](QUICKSTART.md).
 
 ## Install the same release to NAND
 
-Keep the jumper in **SD** mode and run:
+Boot the unified image from SD, keep the jumper in **SD** mode and run:
 
 ```sh
 atlantian-nand-install
 ```
 
-The installer:
+The installation transaction:
 
-1. verifies the board, embedded payload, NAND geometry/ECC and capacity;
-2. creates and verifies a raw+OOB factory backup;
-3. asks once for literal `INSTALL`;
-4. reboots once in SD mode;
-5. SD U-Boot programs and twice read-back-verifies the raw boot area;
-6. SD Linux automatically formats UBI, writes/verifies SquashFS and creates the
+1. validate board identity, embedded payload, NAND geometry/ECC and capacity;
+2. create and verify a raw+OOB factory backup;
+3. require literal `INSTALL`;
+4. reboot once while still in SD mode;
+5. SD U-Boot program and twice read-back-verify the raw boot payload;
+6. SD Linux automatically resume, create UBI, write/verify SquashFS and create the
    writable UBIFS overlay;
-7. asks for the physical **SD → NAND** jumper handoff;
-8. reboots from NAND.
+7. request the physical **SD → NAND** jumper handoff;
+8. reboot from NAND.
 
-`atlantian-nand-install --resume` is only a manual recovery continuation.
+`atlantian-nand-install --resume` exists only for manual recovery continuation.
 
 Fresh destructive installation and cold NAND boot have been physically validated
-on a 512 MiB board through the complete path to multi-user Debian. Remaining
-hardware-validation items are listed in the
+through multi-user Debian on a 512 MiB board. The 1 GiB NAND path and remaining
+destructive/failure-mode tests stay marked separately in the
 [hardware matrix](hardware-support-matrix.md).
 
 > [!CAUTION]
-> The verified factory backup is stored on the SD system by default under
-> `/root/atlantian-factory-nand-backup`. Copy it off the card if factory restore
+> The verified factory backup is stored on the recovery SD under
+> `/root/atlantian-factory-nand-backup`. Copy it off-card if factory restore
 > matters.
 
-For raw layout, SPL, ECC and capacity details, see [NAND](NAND.md).
+NAND geometry, ECC, raw layout, bad blocks and recovery rules are documented only
+in [NAND](NAND.md).
 
-## Optional larger writable layer
+## Optional external writable layer
 
-After booting NAND, insert the same recovery SD and run:
+After booting from NAND, the paired recovery SD can provide a larger writable
+OverlayFS upper:
 
 ```sh
 atlantian-storage adopt
 ```
 
-The command accepts only the paired recovery card, requires literal `ADOPT`, and
-creates an external OverlayFS upper inside its existing ext4 ROOT partition.
-**It does not repartition or erase the recovery card.** Without the card, NAND
-falls back to its internal UBIFS upper.
+`adopt` accepts only the paired recovery card, requires literal `ADOPT`, and
+creates its private upper/work directory inside the existing ext4 ROOT
+partition. It **does not repartition or erase the card**. If the card is absent
+later, boot falls back to the independent internal UBIFS upper.
 
-## Updates
+Storage semantics are documented in [Persistence](PERSISTENCE.md).
 
-| Operation | SD | NAND |
-|---|---|---|
-| Debian packages | normal APT | normal APT into active upper |
-| AtlANTian base/kernel/boot | `atlantian-sysupgrade` | `atlantian-sysupgrade` stages the verified NAND bundle on the paired recovery SD; maintenance continues after switching to SD |
-| Debian-major transition | explicit AtlANTian release-line transition | clean NAND reinstall |
+## Updates after installation
 
-Routine Debian Snapshot refreshes do not change the AtlANTian semantic release
-number. For the full update model, see [Upgrading](UPGRADING.md).
+Use normal APT for Debian packages and `atlantian-sysupgrade` for AtlANTian
+platform releases. NAND platform updates stage maintenance through the paired
+recovery SD; Debian-major NAND changes require a clean reinstall.
 
-See also [SD Quick Start](QUICKSTART.md), [Persistence](PERSISTENCE.md) and the
-[hardware matrix](hardware-support-matrix.md).
+See [Upgrading](UPGRADING.md) for the complete update procedure.

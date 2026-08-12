@@ -1,32 +1,43 @@
 # Debian lifecycle
 
-AtlANTian tracks the configured Debian generation while keeping factory images
-reproducible and preventing automated release/version drift.
+This document owns AtlANTian's Debian-generation and Debian Snapshot automation.
+User-facing platform upgrades are documented in [Upgrading](UPGRADING.md);
+release/version mechanics are documented in [Pipeline](PIPELINE.md).
 
 ## Policy
 
 | Rule | Behavior |
 |---|---|
-| Architecture | `armhf` must still be published by Debian |
+| Architecture | configured Debian generation must still publish `armhf` |
 | Factory input | exact Debian Snapshot metadata is frozen |
-| Runtime repositories | fixed installed codename, never moving `stable` |
-| AtlANTian release | `<Debian major>.<AtlANTian minor>.<AtlANTian patch>[-prerelease]` |
-| Routine Debian refresh | updates Snapshot pins only; never changes AtlANTian version |
-| New Debian major | detected and reported; transition is an explicit release-line decision |
+| Runtime repositories | installed codename is fixed; moving `stable` is never used |
+| Routine Debian change | refresh the frozen Snapshot, then build/verify/publish a new AtlANTian release |
+| New Debian major | report availability only; transition remains explicit |
 | Failure | keep the last verified Snapshot and configured generation |
+
+A routine Snapshot refresh changes the reproducible factory baseline. Because the
+published image changes, it produces the next release number in the current
+AtlANTian release line after the full release gates pass. The Snapshot timestamp
+is still recorded separately from the semantic version.
 
 ## Daily watcher
 
-At **06:17 Asia/Tomsk** automation:
+`Debian Base Watch` runs daily at **06:17 Asia/Tomsk**:
 
-1. reads the currently configured Debian major/codename;
-2. verifies `armhf` in main, updates and security;
-3. compares live Release metadata with the frozen checksums;
-4. if Debian changed, waits until Snapshot contains those exact bytes;
-5. freezes the new Snapshot timestamp/checksums;
-6. commits only Snapshot state;
-7. dispatches `Build & Release` with `publish=false` for full validation;
-8. separately reports when the immediate next Debian major becomes available.
+1. read the configured Debian major/codename;
+2. verify `armhf` availability in main, updates and security;
+3. compare live Release metadata with the frozen checksums;
+4. if metadata changed, wait until Debian Snapshot contains those exact bytes;
+5. write the new Snapshot timestamp/checksums;
+6. validate the frozen inputs;
+7. commit only Snapshot state;
+8. explicitly dispatch `Build & Release` with `origin=debian-watch`;
+9. after full build/validation gates pass, publish the next automatic AtlANTian
+   version;
+10. separately report when the immediate next Debian major becomes available.
+
+The explicit dispatch is required because a workflow push made with
+`GITHUB_TOKEN` does not recursively trigger the normal push release workflow.
 
 ```mermaid
 flowchart LR
@@ -34,18 +45,16 @@ flowchart LR
     B -- no --> C[keep frozen Snapshot]
     B -- yes --> D{Snapshot caught up?}
     D -- no --> C
-    D -- yes --> E[freeze new Snapshot]
-    E --> F[commit Snapshot only]
-    F --> G[build + validate, publish=false]
-    H[Debian aliases] --> I{next major available on armhf?}
-    I -- yes --> J[report explicit transition opportunity]
+    D -- yes --> E[freeze + validate Snapshot]
+    E --> F[commit Snapshot state]
+    F --> G[dispatch Build & Release]
+    G --> H{all release gates pass?}
+    H -- yes --> I[publish next AtlANTian version]
+    H -- no --> J[no release]
+    K[next Debian major] --> L[report only]
 ```
 
-A routine Snapshot refresh does **not** modify `config/release.env` or create a
-new semantic release. The exact Snapshot timestamp is recorded separately in
-runtime/release metadata.
-
-If the runner's `debootstrap` package does not yet know a configured codename,
+If the runner's `debootstrap` package does not yet know the configured codename,
 AtlANTian uses Debian's generic bootstrap script while still targeting the pinned
 codename and Snapshot.
 
@@ -53,41 +62,37 @@ codename and Snapshot.
 > If Debian drops `armhf`, AtlANTian fails closed on the configured generation
 > instead of silently moving to an incompatible base.
 
-## Factory vs running system
+## Factory baseline vs running system
 
 | Factory image | Installed board |
 |---|---|
-| immutable Snapshot baseline | live same-codename Debian repositories |
+| immutable Snapshot baseline | live repositories for the installed codename |
 | reproducible package set | normal security/package maintenance |
-| semantic AtlANTian release + Snapshot identity | release remains unchanged by ordinary `apt upgrade` |
+| exact Snapshot recorded in metadata | `apt upgrade` does not change AtlANTian release identity |
 
-Normal `apt upgrade` never changes the Debian codename or AtlANTian release.
+`apt update`/`apt upgrade` update the running Debian userspace. They do not
+themselves create an AtlANTian release or change Debian major.
 
-## Major transitions
+## Debian-major transition
 
 A Debian-major transition changes the **first component** of the AtlANTian release
-line and is reviewed as an intentional platform transition. Automation may report
-Debian `N+1`, but it never edits `DEBIAN_MAJOR`, `DEBIAN_CODENAME` or the AtlANTian
-release number by itself.
+line and is an intentional platform change. Automation may report Debian `N+1`,
+but it never edits `DEBIAN_MAJOR`, `DEBIAN_CODENAME` or initiates the transition.
 
-**SD:** after an explicit next-major AtlANTian release exists,
-`atlantian-release-check` prefers a same-major bridge release when needed;
-`atlantian-sysupgrade` handles only `N → N+1`, backs up/disables third-party APT
-sources for the transition, switches managed repositories, performs Debian's
-major upgrade and keeps resumable state.
+**SD:** once a compatible next-major AtlANTian release exists,
+`atlantian-sysupgrade` supports only `N → N+1`, stages resumable state and handles
+managed APT sources.
 
-**NAND:** the immutable lower and application state are not automatically rebased
-across Debian majors. Boot the next-major unified SD image, perform a clean NAND
-install, then transfer only known-compatible user/application data and reinstall
-required packages.
+**NAND:** cross-major rebasing is intentionally not supported. Boot the
+next-major unified SD image, perform a clean NAND installation, then restore only
+known-compatible application/user data and reinstall required packages.
 
-Operator procedure and recovery details belong in [Upgrading](UPGRADING.md).
+See [Upgrading](UPGRADING.md) for operator steps.
 
-## Automation recovery
+## Watcher maintenance
 
-Snapshot lag and partially published repository metadata are retried without
-changing the configured release. If the repository itself has had no commit for
-45 days, the watcher emits one empty maintenance commit to keep scheduled checks
-active without carrying a tracked heartbeat-state file. External Debian changes
-outside the validated contract fail closed and require explicit maintenance
-rather than an inferred transition.
+Snapshot lag and partially published Debian metadata are retried without modifying
+the configured release generation. If the public repository has no commit for
+45 days, the watcher may create one empty maintenance commit solely to keep
+GitHub's scheduled workflow active; it does not alter release inputs and does not
+trigger `Build & Release`.

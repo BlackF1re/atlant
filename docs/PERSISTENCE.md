@@ -1,6 +1,8 @@
 # Persistence
 
-AtlANTian has one public image and two runtime storage models.
+This document owns writable-state behavior. NAND geometry/ECC is documented in
+[NAND](NAND.md); release-to-release migration is documented in
+[Upgrading](UPGRADING.md).
 
 ## SD boot
 
@@ -15,25 +17,22 @@ ROOT expands across the card on first boot. Debian package state, `/etc`, `/root
 ## NAND boot
 
 ```text
-static UBI -> SquashFS/Zstd, ro       immutable lower
-dynamic UBI -> UBIFS/LZO, rw,noatime internal/default upper
-recovery SD ext4 directory            optional external upper
+static UBI -> SquashFS/Zstd, ro        immutable lower
+dynamic UBI -> UBIFS/LZO, rw,noatime   internal/default upper
+recovery SD ext4 directory             optional external upper
 ```
 
-Early initramfs assembles OverlayFS before systemd. `/tmp` and journal storage are
-volatile on NAND; zram replaces persistent swap.
+Early initramfs assembles OverlayFS before systemd. `/tmp` and persistent journal
+storage are avoided on NAND; zram replaces persistent swap.
 
-The internal `overlay` UBI volume is created with `ubimkvol -m`, so it receives
-all UBI space left after the static root volume and UBI reserves. Its actual size
-therefore depends on the compressed base and real bad blocks.
+The internal `overlay` UBI volume is created with `ubimkvol -m`, so its actual
+size depends on the compressed base, UBI reserves and real bad blocks.
 
 ## Volatile APT workspace
 
-Both SD and NAND editions keep APT's disposable repository state out of persistent
-storage. A dedicated `/run/apt` tmpfs is mounted at boot and is capped at 50% of
-physical RAM; tmpfs allocates pages on demand, so this is a limit rather than a
-reservation. Its pages remain swappable and can therefore benefit from AtlANTian's
-zram under memory pressure.
+Both editions keep disposable APT repository data in `/run/apt`, backed by tmpfs
+with a **50% of RAM size limit**. This is a ceiling, not preallocated memory; tmpfs
+uses pages on demand and can benefit from zram under pressure.
 
 APT uses:
 
@@ -42,27 +41,38 @@ APT uses:
 /run/apt/archives/   downloaded .deb files
 ```
 
-Both disappear at reboot. `/var/lib/dpkg`, installed package payloads and APT
-configuration remain persistent. Consequently, after a reboot `apt update` is
-required before repository-backed searches, upgrades or installation of packages
-that are not already known locally.
+These disappear at reboot. Persistent package state remains in `/var/lib/dpkg`
+and APT configuration remains under `/etc/apt`.
 
-Repository indexes are kept gzip-compressed, description translations and Contents
-indexes are disabled by default, and APT's persistent `pkgcache`/`srcpkgcache`
-files are not generated. Later package-specific APT configuration can still
-re-enable an index target when a tool explicitly needs it.
+Consequences:
 
-## External upper
+- run `apt update` again after reboot before repository-backed searches/upgrades;
+- repository indexes stay gzip-compressed;
+- description translations and Contents indexes are disabled by default;
+- persistent APT `pkgcache`/`srcpkgcache` files are not generated.
 
-After booting NAND, the paired recovery SD can be adopted with:
+Package-specific APT configuration may still re-enable an index target when a
+tool explicitly requires it.
+
+## External NAND upper
+
+After NAND boot, the paired recovery SD can be adopted:
 
 ```sh
 atlantian-storage adopt
 ```
 
-The card is **not repartitioned or erased**. AtlANTian creates
-`/.atlantian-extroot/{token,upper,work}` on its existing ext4 ROOT partition,
-copies the current internal writable state and stores a matching token internally.
+The command does **not** repartition or erase the card. It creates:
+
+```text
+/.atlantian-extroot/
+├─ token
+├─ upper/
+└─ work/
+```
+
+on the card's existing ext4 ROOT partition, copies the current internal writable
+state and records a matching token internally.
 
 At boot:
 
@@ -71,31 +81,17 @@ matching adopted card present -> SquashFS lower + SD upper
 card absent / token mismatch   -> SquashFS lower + internal UBIFS upper
 ```
 
-The two uppers are independent after adoption. There is no pooling or automatic
-two-way synchronization.
+The internal and external uppers are independent after adoption; there is no
+pooling or automatic two-way synchronization.
 
-## Full base upgrades
+## What upgrades preserve
 
-Ordinary Debian package updates modify only the active upper.
+Ordinary `apt` operations modify only the active writable layer.
 
-For a same-major AtlANTian NAND base/kernel/raw-boot update, run from NAND with the
-paired recovery SD inserted:
+A same-major NAND platform upgrade creates a fresh target upper and migrates
+selected persistent user/admin deltas plus manual package intent rather than
+copying the old upper wholesale. This avoids carrying an old dpkg database,
+package payloads and whiteouts over a new immutable base.
 
-```sh
-atlantian-sysupgrade
-```
-
-The target bundle is downloaded and verified onto the recovery SD. After the
-physical **NAND → SD** handoff and reboot, the prepared maintenance transaction
-starts from SD and performs `atlantian-nand-upgrade`.
-
-The updater captures selected persistent user/application deltas plus manual
-package intent, writes the target immutable base, creates fresh upper/work
-directories and replays the deltas. Package databases and package payload files
-come from the target base/current repositories rather than from a complete upper
-copy.
-
-Each rebased upper has its own one-shot package-reconciliation marker. A Debian-
-major NAND transition uses a clean install.
-
-Exact update policy: [Upgrading](UPGRADING.md). NAND layout/ECC: [NAND](NAND.md).
+Exact preserved namespaces, reconciliation and failure behavior are defined in
+[Upgrading](UPGRADING.md).
