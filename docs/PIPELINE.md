@@ -194,7 +194,7 @@ For a prerelease, the distinction is intentional:
 
 ```text
 Debian package Version:  13.1.0~alpha.8-1
-public asset filename:    atlantian-kernel_13.1.0.alpha.8-1_armhf.deb
+public asset filename:    atlantian-kernel_13.1.0.alpha.8-1_<arch>.deb
 ```
 
 The updater validates internal Package/Version/Architecture fields and SHA-256,
