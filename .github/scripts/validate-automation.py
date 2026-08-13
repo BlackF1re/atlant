@@ -124,12 +124,12 @@ def validate_workflows() -> None:
             fail(f"{filename}: checkout credentials must not persist")
 
     build = parsed["build-release.yml"]
-    release_job = (build.get("jobs") or {}).get("release", {})
-    build_permissions = release_job.get("permissions")
-    expected_build_permissions = {"contents": "write", "id-token": "write", "attestations": "write"}
-    if build_permissions != expected_build_permissions:
-        fail("build-release.yml: release job permissions differ from publication policy")
-    if (release_job.get("env") or {}).get("ATLANTIAN_GITHUB_REPO") != "${{ github.repository }}":
+    publish_job = (build.get("jobs") or {}).get("publish", {})
+    publish_permissions = publish_job.get("permissions")
+    expected_publish_permissions = {"actions": "read", "contents": "write"}
+    if publish_permissions != expected_publish_permissions:
+        fail("build-release.yml: publish job permissions differ from publication policy")
+    if (publish_job.get("env") or {}).get("ATLANTIAN_GITHUB_REPO") != "${{ github.repository }}":
         fail("build-release.yml: built images must derive the release repository from github.repository")
 
     dispatch = (workflow_trigger(build) or {}).get("workflow_dispatch") or {}
