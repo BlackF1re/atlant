@@ -9,6 +9,8 @@ PREVIOUS=$(git describe --tags --abbrev=0 "$REF^" 2>/dev/null || true)
 METADATA=${RELEASE_METADATA:-artifacts/current/RELEASE-METADATA.json}
 [[ -s $METADATA ]] || { echo "release metadata is missing: $METADATA" >&2; exit 2; }
 ARTIFACT_DIR=$(dirname "$METADATA")
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+bash "$ROOT/scripts/prepare-public-release.sh" "$ARTIFACT_DIR"
 COMMIT=$(git rev-parse "$REF")
 SHORT_COMMIT=$(git rev-parse --short=12 "$REF")
 
@@ -82,18 +84,25 @@ artifact_row() {
   name=$(basename "$path")
   printf '| `%s` | %s |\n' "$name" "$(fmt_bytes "$(stat -c %s "$path")")"
 }
+find_one() {
+  local pattern=$1 label=$2
+  mapfile -t matches < <(find "$ARTIFACT_DIR" -maxdepth 1 -type f -name "$pattern" -print)
+  (( ${#matches[@]} == 1 )) || { echo "expected one $label artifact, found ${#matches[@]}" >&2; exit 2; }
+  printf '%s\n' "${matches[0]}"
+}
 
-IMAGE="$ARTIFACT_DIR/$(python3 - "$METADATA" <<'PY'
+RAW_IMAGE_NAME=$(python3 - "$METADATA" <<'PY'
 import json,sys
 with open(sys.argv[1], encoding='utf-8') as f: print(json.load(f)['image'])
 PY
-)"
+)
+IMAGE="$ARTIFACT_DIR/${RAW_IMAGE_NAME}.xz"
 NAND_BUNDLE="$ARTIFACT_DIR/atlantian-nand-$RELEASE.tar.zst"
-PLATFORM_DEB="$ARTIFACT_DIR/atlantian-platform_${PACKAGE_VERSION}_all.deb"
-KERNEL_DEB=$(find "$ARTIFACT_DIR" -maxdepth 1 -type f -name "atlantian-kernel_${PACKAGE_VERSION}_*.deb" -print -quit)
-RELEASE_DEB="$ARTIFACT_DIR/atlantian-release_${PACKAGE_VERSION}_all.deb"
+PLATFORM_DEB=$(find_one 'atlantian-platform_*.deb' platform)
+KERNEL_DEB=$(find_one 'atlantian-kernel_*.deb' kernel)
+RELEASE_DEB=$(find_one 'atlantian-release_*.deb' release)
+UPDATE_MARKER="$ARTIFACT_DIR/atlantian-update.json"
 SUMS="$ARTIFACT_DIR/SHA256SUMS"
-[[ -n $KERNEL_DEB ]] || { echo 'release kernel package is missing' >&2; exit 2; }
 
 {
   printf '## Release\n\n'
@@ -128,13 +137,14 @@ SUMS="$ARTIFACT_DIR/SHA256SUMS"
   printf '| NAND writable overlay | — | — | **>= %s** guaranteed | — |\n' \
     "$(fmt_bytes "$NAND_MIN_OVERLAY_BYTES")"
 
-  printf '\n## Artifacts\n\n'
+  printf '\n## Public artifacts\n\n'
   printf '| Artifact | Size |\n|---|---:|\n'
   artifact_row "$IMAGE"
   artifact_row "$NAND_BUNDLE"
   artifact_row "$PLATFORM_DEB"
   artifact_row "$KERNEL_DEB"
   artifact_row "$RELEASE_DEB"
+  artifact_row "$UPDATE_MARKER"
   artifact_row "$METADATA"
   artifact_row "$SUMS"
 

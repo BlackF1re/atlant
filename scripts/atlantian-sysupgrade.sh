@@ -2,10 +2,11 @@
 # Interactive, Debian-style in-place AtlANTian system updater.
 set -eu
 
-STATE=/var/lib/atlantian/update/available.env
-NOTES=/var/lib/atlantian/update/available-notes.txt
-MAJOR_PENDING=/var/lib/atlantian/update/major-upgrade-pending.env
-STAGE=/var/cache/atlantian/update
+STATE=${ATLANTIAN_UPDATE_STATE:-/var/lib/atlantian/update/available.env}
+NOTES=${ATLANTIAN_UPDATE_NOTES:-/var/lib/atlantian/update/available-notes.txt}
+MAJOR_PENDING=${ATLANTIAN_MAJOR_PENDING:-/var/lib/atlantian/update/major-upgrade-pending.env}
+STAGE=${ATLANTIAN_UPDATE_STAGE:-/var/cache/atlantian/update}
+VERSION_FILE=${ATLANTIAN_VERSION_FILE:-/usr/lib/atlantian/version}
 RELEASE_CONFIG=${ATLANTIAN_RELEASE_CONFIG:-/etc/atlantian/releases.conf}
 LED_HELPER=/usr/local/sbin/atlantian-update-leds
 LED_LOCK=/run/atlantian-update-leds.lock
@@ -16,11 +17,29 @@ ledpid=
 
 get() { sed -n "s/^$1=//p" "$STATE" | head -n1; }
 pending_get() { sed -n "s/^$1=//p" "$MAJOR_PENDING" | head -n1; }
-current() { cat /usr/lib/atlantian/version 2>/dev/null || printf unknown; }
+current() { cat "$VERSION_FILE" 2>/dev/null || printf unknown; }
 major_of() {
   value=${1%%.*}
   case "$value" in ''|*[!0-9]*) return 1 ;; esac
   printf '%s\n' "$value"
+}
+package_version_matches_release() {
+  package_version=$1
+  release_version=$2
+  case "$release_version" in
+    [0-9]*.[0-9]*.[0-9]*-*)
+      core=${release_version%%-*}
+      prerelease=${release_version#*-}
+      prefix="${core}~${prerelease}-"
+      ;;
+    *) prefix="${release_version}-" ;;
+  esac
+  case "$package_version" in
+    "$prefix"*) revision=${package_version#"$prefix"} ;;
+    *) return 1 ;;
+  esac
+  case "$revision" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$revision" -gt 0 ]
 }
 human_size() { numfmt --to=iec-i --suffix=B "$1" 2>/dev/null || printf '%s bytes' "$1"; }
 record_update_download() {
@@ -92,21 +111,57 @@ EOF_SHOW
   printf '\nChanges:\n'
   [ -r "$NOTES" ] && sed -n '1,120p' "$NOTES" || echo '  No release notes were published.'
 }
+find_staged_package() {
+  package=$1
+  arch=$2
+  release_version=$3
+  found=
+  for file in "$STAGE"/"${package}_"*.deb; do
+    [ -f "$file" ] || continue
+    [ "$(dpkg-deb -f "$file" Package 2>/dev/null || true)" = "$package" ] || continue
+    actual_version=$(dpkg-deb -f "$file" Version 2>/dev/null || true)
+    package_version_matches_release "$actual_version" "$release_version" || continue
+    [ "$(dpkg-deb -f "$file" Architecture 2>/dev/null || true)" = "$arch" ] || continue
+    [ -z "$found" ] || return 1
+    found=$file
+  done
+  [ -n "$found" ] || return 1
+  printf '%s\n' "$found"
+}
 verify_staged_version() {
-  version=$1
+  release_version=$1
   [ -s "$STAGE/SHA256SUMS" ] || return 1
-  for name in \
-    "atlantian-platform_${version}_all.deb" \
-    "atlantian-kernel_${version}_armhf.deb" \
-    "atlantian-release_${version}_all.deb"; do
-    file=$STAGE/$name
-    [ -s "$file" ] || return 1
-    expected=$(awk -v name="$name" '$2 == name { print $1; exit }' "$STAGE/SHA256SUMS")
+  verified_package_version=
+
+  for spec in 'atlantian-platform all' 'atlantian-kernel armhf' 'atlantian-release all'; do
+    set -- $spec
+    package=$1
+    arch=$2
+    file=$(find_staged_package "$package" "$arch" "$release_version") || return 1
+    package_version=$(dpkg-deb -f "$file" Version 2>/dev/null || true)
+    [ -n "$package_version" ] || return 1
+    if [ -z "$verified_package_version" ]; then
+      verified_package_version=$package_version
+    else
+      [ "$verified_package_version" = "$package_version" ] || return 1
+    fi
+    name=$(basename "$file")
+    canonical_name="${package}_${package_version}_${arch}.deb"
+
+    # New releases checksum the exact public filename. Historical prereleases
+    # may have GitHub-normalized '.' asset names while SHA256SUMS still contains
+    # Debian's canonical '~' filename, so accept either name for that same file.
+    expected=$(awk -v public="$name" -v canonical="$canonical_name" \
+      '$2 == public || $2 == canonical { print $1; exit }' "$STAGE/SHA256SUMS")
     [ -n "$expected" ] || return 1
     [ "$(sha256sum "$file" | awk '{print $1}')" = "$expected" ] || return 1
-    [ "$(dpkg-deb -f "$file" Version)" = "$version" ] || return 1
     dpkg-deb --info "$file" >/dev/null || return 1
   done
+
+  if [ -r "$STATE" ] && [ "$(get version 2>/dev/null || true)" = "$release_version" ]; then
+    advertised=$(get package_version 2>/dev/null || true)
+    [ -z "$advertised" ] || [ "$advertised" = "$verified_package_version" ] || return 1
+  fi
 }
 download_and_verify() {
   mkdir -p "$STAGE"
@@ -128,8 +183,8 @@ download_and_verify() {
   done
   echo "Downloading $(get sums_name)"
   curl -fL --retry 3 --progress-bar -o "$STAGE/SHA256SUMS" "$(get sums_url)"
-  version=$(get version)
-  verify_staged_version "$version" || { echo 'package checksum/version verification failed' >&2; exit 1; }
+  release_version=$(get version)
+  verify_staged_version "$release_version" || { echo 'package checksum/version verification failed' >&2; exit 1; }
   echo 'All packages are verified.'
 }
 ensure_pending_packages() {
@@ -197,11 +252,17 @@ write_major_pending() {
 }
 install_staged_packages() {
   target_version=$1
-  printf '%s\n' "$target_version" >"$MAJOR_AUTH"
+  authorize_major=${2:-false}
+  verify_staged_version "$target_version" || { echo 'staged package set is not verified' >&2; exit 1; }
+  platform=$(find_staged_package atlantian-platform all "$target_version") || exit 1
+  kernel=$(find_staged_package atlantian-kernel armhf "$target_version") || exit 1
+  releasepkg=$(find_staged_package atlantian-release all "$target_version") || exit 1
+
+  if [ "$authorize_major" = true ]; then
+    printf '%s\n' "$target_version" >"$MAJOR_AUTH"
+  fi
   apt-get -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' install -y \
-    "$STAGE/atlantian-platform_${target_version}_all.deb" \
-    "$STAGE/atlantian-kernel_${target_version}_armhf.deb" \
-    "$STAGE/atlantian-release_${target_version}_all.deb"
+    "$platform" "$kernel" "$releasepkg"
   rm -f "$MAJOR_AUTH"
 }
 check_dpkg_state() {
@@ -245,7 +306,7 @@ resume_major_upgrade() {
   trap 'exit 143' TERM HUP
   start_update_leds
   ensure_pending_packages "$target_version"
-  install_staged_packages "$target_version"
+  install_staged_packages "$target_version" true
   [ "$(cat /usr/lib/atlantian/version 2>/dev/null || true)" = "$target_version" ] || {
     echo 'installed AtlANTian version marker does not match the pending release' >&2; exit 1;
   }
@@ -259,6 +320,10 @@ resume_major_upgrade() {
   rm -f "$MAJOR_PENDING"
   reboot_now
 }
+
+if [ "${ATLANTIAN_SYSUPGRADE_LIBRARY_ONLY:-0}" = 1 ]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 [ "$(id -u)" = 0 ] || { echo 'run as root' >&2; exit 77; }
 mode=${1:-install}
@@ -328,12 +393,9 @@ fi
 
 echo 'Installing AtlANTian platform, kernel and release packages...'
 if [ "$major_upgrade" = true ]; then
-  install_staged_packages "$target_version"
+  install_staged_packages "$target_version" true
 else
-  apt-get -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' install -y \
-    "$STAGE/atlantian-platform_${target_version}_all.deb" \
-    "$STAGE/atlantian-kernel_${target_version}_armhf.deb" \
-    "$STAGE/atlantian-release_${target_version}_all.deb"
+  install_staged_packages "$target_version" false
 fi
 [ "$(cat /usr/lib/atlantian/version 2>/dev/null || true)" = "$target_version" ] || {
   echo 'installed AtlANTian version marker does not match the selected release' >&2; exit 1;

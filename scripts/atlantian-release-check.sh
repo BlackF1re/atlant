@@ -7,13 +7,14 @@ RELEASE_CONFIG=${ATLANTIAN_RELEASE_CONFIG:-/etc/atlantian/releases.conf}
 [ -r "$RELEASE_CONFIG" ] && . "$RELEASE_CONFIG"
 REPO=${ATLANTIAN_GITHUB_REPO:-}
 API=${ATLANTIAN_RELEASE_API:-https://api.github.com}
-STATE_DIR=/var/lib/atlantian/update
+STATE_DIR=${ATLANTIAN_UPDATE_STATE_DIR:-/var/lib/atlantian/update}
 STATE_FILE=$STATE_DIR/available.env
 NOTES_FILE=$STATE_DIR/available-notes.txt
+VERSION_FILE=${ATLANTIAN_VERSION_FILE:-/usr/lib/atlantian/version}
 MAX_RELEASE_PAGES=${ATLANTIAN_RELEASE_PAGES:-30}
 
 get() { sed -n "s/^$1=//p" "$STATE_FILE" 2>/dev/null | head -n1; }
-current() { cat /usr/lib/atlantian/version 2>/dev/null || true; }
+current() { cat "$VERSION_FILE" 2>/dev/null || true; }
 major_of() {
   value=${1%%.*}
   case "$value" in ''|*[!0-9]*) return 1 ;; esac
@@ -30,17 +31,6 @@ ordering_version() {
     *) printf '%s\n' "$value" ;;
   esac
 }
-package_version_of() {
-  value=$1
-  case "$value" in
-    [0-9]*.[0-9]*.[0-9]*-*)
-      core=${value%%-*}
-      prerelease=${value#*-}
-      printf '%s~%s-1\n' "$core" "$prerelease"
-      ;;
-    *) printf '%s-1\n' "$value" ;;
-  esac
-}
 newer() { dpkg --compare-versions "$(ordering_version "$1")" gt "$(ordering_version "$2")"; }
 clear_state() { rm -f "$STATE_FILE" "$NOTES_FILE"; }
 asset() {
@@ -49,16 +39,72 @@ asset() {
   printf '%s' "$release_json" | jq -r --arg name "$asset_name" \
     '.assets[] | select(.name == $name) | [.name, .browser_download_url, .size] | @tsv' | head -n1
 }
+package_version_from_file_version() {
+  file_version=$1
+  release_version=$2
+  case "$release_version" in
+    [0-9]*.[0-9]*.[0-9]*-*)
+      core=${release_version%%-*}
+      prerelease=${release_version#*-}
+      canonical_prefix="${core}~${prerelease}-"
+      public_prefix="${core}.${prerelease}-"
+      case "$file_version" in
+        "$canonical_prefix"*) revision=${file_version#"$canonical_prefix"} ;;
+        "$public_prefix"*) revision=${file_version#"$public_prefix"} ;;
+        *) return 1 ;;
+      esac
+      ;;
+    *)
+      canonical_prefix="${release_version}-"
+      case "$file_version" in
+        "$canonical_prefix"*) revision=${file_version#"$canonical_prefix"} ;;
+        *) return 1 ;;
+      esac
+      core=$release_version
+      prerelease=
+      ;;
+  esac
+  case "$revision" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$revision" -gt 0 ] || return 1
+  if [ -n "$prerelease" ]; then
+    printf '%s~%s-%s\n' "$core" "$prerelease" "$revision"
+  else
+    printf '%s-%s\n' "$core" "$revision"
+  fi
+}
 package_asset() {
   release_json=$1 release_version=$2 package=$3 arch=$4
-  package_version=$(package_version_of "$release_version")
-  asset "$release_json" "${package}_${package_version}_${arch}.deb"
+  tab=$(printf '\t')
+  matches=0
+  result=
+  rows=$(printf '%s' "$release_json" | jq -r --arg prefix "${package}_" --arg suffix "_${arch}.deb" \
+    '.assets[] | select((.name | startswith($prefix)) and (.name | endswith($suffix))) | [.name, .browser_download_url, .size] | @tsv')
+  while IFS="$tab" read -r name url size; do
+    [ -n "$name" ] || continue
+    file_version=${name#"${package}_"}
+    file_version=${file_version%"_${arch}.deb"}
+    package_version_from_file_version "$file_version" "$release_version" >/dev/null 2>&1 || continue
+    matches=$((matches + 1))
+    result=$(printf '%s\t%s\t%s' "$name" "$url" "$size")
+  done <<EOF_ROWS
+$rows
+EOF_ROWS
+  [ "$matches" -eq 1 ] || return 1
+  printf '%s\n' "$result"
+}
+package_version_from_asset_name() {
+  name=$1 release_version=$2 package=$3 arch=$4
+  file_version=${name#"${package}_"}
+  [ "$file_version" != "$name" ] || return 1
+  suffix="_${arch}.deb"
+  case "$file_version" in *"$suffix") file_version=${file_version%"$suffix"} ;; *) return 1 ;; esac
+  package_version_from_file_version "$file_version" "$release_version"
 }
 complete_release() {
   release_json=$1 release_version=$2
-  [ -n "$(package_asset "$release_json" "$release_version" atlantian-platform all)" ] && \
-  [ -n "$(package_asset "$release_json" "$release_version" atlantian-kernel armhf)" ] && \
-  [ -n "$(package_asset "$release_json" "$release_version" atlantian-release all)" ] && \
+  [ -n "$(package_asset "$release_json" "$release_version" atlantian-platform all 2>/dev/null || true)" ] && \
+  [ -n "$(package_asset "$release_json" "$release_version" atlantian-kernel armhf 2>/dev/null || true)" ] && \
+  [ -n "$(package_asset "$release_json" "$release_version" atlantian-release all 2>/dev/null || true)" ] && \
   [ -n "$(asset "$release_json" SHA256SUMS)" ]
 }
 
@@ -94,7 +140,7 @@ while [ "$page" -le "$MAX_RELEASE_PAGES" ]; do
     [ -n "$release_json" ] || continue
     is_prerelease=$(printf '%s' "$release_json" | jq -r '.prerelease')
     [ "$is_prerelease" != true ] || [ "$allow_prerelease" = true ] || continue
-    [ -z "$installed" ] || newer "$version" "$installed" || continue
+    newer "$version" "$installed" || continue
     candidate_major=$(major_of "$version" 2>/dev/null || true)
     [ -n "$candidate_major" ] || continue
     complete_release "$release_json" "$version" || continue
@@ -150,6 +196,13 @@ EOF_RELEASE
 IFS="$tab" read -r sums_name sums_url sums_size <<EOF_SUMS
 $sums
 EOF_SUMS
+package_version=$(package_version_from_asset_name "$platform_name" "$version" atlantian-platform all) || { echo 'invalid platform package filename' >&2; exit 1; }
+kernel_package_version=$(package_version_from_asset_name "$kernel_name" "$version" atlantian-kernel armhf) || { echo 'invalid kernel package filename' >&2; exit 1; }
+release_package_version=$(package_version_from_asset_name "$release_name" "$version" atlantian-release all) || { echo 'invalid release package filename' >&2; exit 1; }
+[ "$package_version" = "$kernel_package_version" ] && [ "$package_version" = "$release_package_version" ] || {
+  echo 'selected release mixes Debian package revisions' >&2
+  exit 1
+}
 update_name= update_url= update_size=
 if [ -n "$update_marker" ]; then
   IFS="$tab" read -r update_name update_url update_size <<EOF_UPDATE
@@ -161,8 +214,8 @@ mkdir -p "$STATE_DIR"
 tmp=$(mktemp "$STATE_DIR/.available.XXXXXX"); notes_tmp=$(mktemp "$STATE_DIR/.notes.XXXXXX")
 trap 'rm -f "$tmp" "$notes_tmp"' EXIT
 printf '%s\n' "$notes" >"$notes_tmp"
-printf 'version=%s\nrelease_id=%s\ntag=%s\npublished_at=%s\nplatform_name=%s\nplatform_url=%s\nplatform_size=%s\nkernel_name=%s\nkernel_url=%s\nkernel_size=%s\nrelease_name=%s\nrelease_url=%s\nrelease_size=%s\nsums_name=%s\nsums_url=%s\nsums_size=%s\nupdate_name=%s\nupdate_url=%s\nupdate_size=%s\n' \
-  "$version" "$version" "$tag" "$published" \
+printf 'version=%s\npackage_version=%s\nrelease_id=%s\ntag=%s\npublished_at=%s\nplatform_name=%s\nplatform_url=%s\nplatform_size=%s\nkernel_name=%s\nkernel_url=%s\nkernel_size=%s\nrelease_name=%s\nrelease_url=%s\nrelease_size=%s\nsums_name=%s\nsums_url=%s\nsums_size=%s\nupdate_name=%s\nupdate_url=%s\nupdate_size=%s\n' \
+  "$version" "$package_version" "$version" "$tag" "$published" \
   "$platform_name" "$platform_url" "$platform_size" \
   "$kernel_name" "$kernel_url" "$kernel_size" \
   "$release_name" "$release_url" "$release_size" \

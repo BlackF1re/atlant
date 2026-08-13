@@ -33,6 +33,29 @@ reached.
 Automatic CI publication and Debian Snapshot refreshes may therefore make a new
 AtlANTian version available without any manual version edit in the source tree.
 
+### Release version vs Debian package version
+
+AtlANTian release identity and Debian package identity are related but not the
+same string. For a prerelease such as:
+
+```text
+AtlANTian release:       13.1.0-alpha.8
+Debian package Version:  13.1.0~alpha.8-1
+public .deb filename:    atlantian-kernel_13.1.0.alpha.8-1_armhf.deb
+```
+
+The `~` remains inside the package metadata because Debian uses it to sort a
+prerelease before the corresponding stable version. Public GitHub asset names use
+`.` in that filename position. `atlantian-release-check` understands both the
+public GitHub form and a canonical `~` filename used by mirrors; `atlantian-sysupgrade`
+verifies the actual Package, Version and Architecture fields inside every
+`.deb`, plus its published SHA-256, before installation.
+
+For historical prereleases where GitHub normalized a `~` filename after upload
+but `SHA256SUMS` still contained the canonical Debian basename, the updater also
+accepts that checksum alias for the same internally verified package. New
+releases publish checksums using the exact public filenames.
+
 ## Ordinary Debian package maintenance
 
 On either storage edition:
@@ -55,11 +78,24 @@ Run:
 atlantian-sysupgrade
 ```
 
-For a same-major release, the updater verifies the matching AtlANTian package set,
-updates platform/kernel/release packages and atomically refreshes FAT boot assets.
+For a same-major release, the updater:
 
-The AtlANTian package set is version-locked; kernel/platform/release packages are
-not intentionally mixed across releases.
+1. discovers a complete compatible Release;
+2. downloads the exact three advertised AtlANTian `.deb` assets and public
+   `SHA256SUMS`;
+3. verifies package identity and checksum independently of the filename;
+4. installs the version-locked platform/kernel/release package set;
+5. refreshes Debian packages from the installed release's managed repositories;
+6. reboots.
+
+The kernel/platform/release package set is not intentionally mixed across
+AtlANTian releases.
+
+The package post-install scripts update FAT boot files using per-file
+write-then-rename replacement. Each file replacement is atomic, but the complete
+multi-file boot set is **not one filesystem transaction**. Do not cut power during
+a platform update; recovery remains the SD image/reflash path if an interruption
+leaves mixed boot assets.
 
 ## Same-major NAND platform update
 
@@ -126,12 +162,16 @@ internal upper.
 
 ## Download metrics
 
-Every release publishes a versioned user image such as
-`atlantian-13.1.0-alpha.6.img.xz`. The **Image Downloads** badge sums GitHub's
-`download_count` only for assets matching `atlantian-<release>.img.xz` across all
-releases. It refreshes after release publication and hourly, so a new image begins
-at zero without discarding downloads of earlier versioned images. Packages,
-checksums and metadata are excluded.
+Every release publishes a versioned user image:
+
+```text
+atlantian-<release>.img.xz
+```
+
+The **Image Downloads** badge sums GitHub's `download_count` only for assets
+matching that pattern across all releases. It refreshes after release publication
+and hourly, so a new image begins at zero without discarding downloads of earlier
+versioned images. Packages, checksums and metadata are excluded.
 
 Every release also publishes the tiny stable `atlantian-update.json` marker.
 `atlantian-sysupgrade --check` and `--notes` do **not** download it. After the user

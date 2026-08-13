@@ -10,10 +10,10 @@ NAND and then boots without a card. The paired recovery SD may optionally provid
 a larger writable OverlayFS upper.
 
 > [!IMPORTANT]
-> Fresh destructive installation and cold NAND boot are physically validated on
-> a 512 MiB board. Dedicated 1 GiB NAND boot, real bad-block placement,
-> adopted-SD fallback, interrupted recovery and controlled factory restore remain
-> hardware-validation items.
+> Fresh destructive installation, cold NAND boot and warm reboot are physically
+> validated on both 512 MiB and 1 GiB RAM board variants. Real factory-bad-block
+> placement, adopted-SD fallback, interrupted/power-loss recovery and controlled
+> factory restore remain hardware-validation items.
 
 ## Storage architecture
 
@@ -173,7 +173,7 @@ See [Persistence](PERSISTENCE.md) for persistence semantics.
 
 ## Validation boundary
 
-Validated on real 512 MiB hardware:
+Validated on real 512 MiB and 1 GiB hardware:
 
 - verified raw+OOB pre-install backup;
 - SD-U-Boot raw programming/read-back transaction;
@@ -181,11 +181,12 @@ Validated on real 512 MiB hardware:
 - dedicated SPL NAND reader and NAND U-Boot load;
 - kernel/initramfs/DTB load from NAND;
 - UBI + ubiblock + SquashFS + UBIFS + OverlayFS root;
-- systemd multi-user boot, Ethernet/SSH and FPGA userspace startup.
+- systemd multi-user boot, Ethernet/SSH and FPGA userspace startup;
+- cold NAND boot and warm reboot;
+- recovery-SD handoff and same-major NAND rebase.
 
 Still requiring dedicated bench validation:
 
-- cold NAND boot on a 1 GiB board;
 - actual factory-bad-block placement;
 - adopted-SD upper and no-card fallback;
 - interrupted/power-loss recovery;
