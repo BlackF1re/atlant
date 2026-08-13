@@ -16,7 +16,7 @@ EXPECTED_WORKFLOWS = {
     "build-release.yml": "Build & Release",
     "debian-watch.yml": "Debian Base Watch",
     "dependabot-actions-automerge.yml": "Dependabot Auto-merge",
-    "image-download-metrics.yml": "Image Download Metric",
+    "image-download-metrics.yml": "Download Metrics",
 }
 EXPECTED_PERMISSIONS = {
     "ci.yml": {"contents": "read"},
@@ -231,15 +231,18 @@ def validate_workflows() -> None:
     metrics = parsed["image-download-metrics.yml"]
     metric_schedule = workflow_trigger(metrics).get("schedule") or []
     if metric_schedule != [{"cron": "17 * * * *"}]:
-        fail("image download metric must refresh hourly at minute 17")
+        fail("download metrics must refresh hourly at minute 17")
     release = workflow_trigger(metrics).get("release") or {}
     if release.get("types") != ["published"]:
-        fail("image download metric must refresh after release publication")
-    metric_step = step_named(metrics, "refresh", "Sum versioned image downloads")
+        fail("download metrics must refresh after release publication")
+    metric_step = step_named(metrics, "refresh", "Sum public download metrics")
     require_run(metric_step, 'test("^atlantian-[^/]+\\\\.img\\\\.xz$")', "image metric asset filter")
-    require_run(metric_step, "gh api --paginate --slurp", "image metric complete release history")
+    require_run(metric_step, 'select(.name == "atlantian-update.json")', "system update metric asset filter")
+    require_run(metric_step, "gh api --paginate --slurp", "download metrics complete release history")
     payload_step = step_named(metrics, "refresh", "Create Pages payload")
-    require_run(payload_step, ">site/image-downloads.json", "image metric Pages payload")
+    require_run(payload_step, "imageDownloads", "image metric Pages payload")
+    require_run(payload_step, "systemUpdates", "system update metric Pages payload")
+    require_run(payload_step, ">site/image-downloads.json", "download metrics Pages payload")
     step_named(metrics, "refresh", "Configure Pages")
     step_named(metrics, "refresh", "Upload Pages artifact")
     step_named(metrics, "refresh", "Deploy Pages artifact")

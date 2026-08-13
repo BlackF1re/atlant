@@ -139,6 +139,11 @@ confirms an update (or uses `--yes`), the SD/NAND updater attempts to fetch it o
 and caches the valid marker for that target release. Failure to fetch or validate
 the marker never blocks the update.
 
+The **System Updates** badge uses the same GitHub Pages refresh as Image Downloads:
+it sums `download_count` only for `atlantian-update.json` assets across all
+releases, after publication and hourly. It excludes packages, images, checksums and
+metadata.
+
 No installation ID, serial number, IP-derived token or other device identifier is
 sent by AtlANTian. GitHub only records its normal Release-asset download count.
 Consequently **System Updates is not a unique-device counter** and does not prove

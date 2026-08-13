@@ -91,16 +91,15 @@ if grep -Fq 'browser_download_url' "$upgrade"; then
   fail 'release-upgrade gate still resolves public Release asset download URLs'
 fi
 
-# Runtime update accounting is deliberately anonymous and best-effort. The JSON
-# suffix must be followed by .svg in the Shields URL, otherwise Shields treats
-# the asset suffix as its response format and the badge breaks.
+# Runtime update accounting is deliberately anonymous and best-effort.
 require 'atlantian-update.json' "$checker"
 require 'record_update_download' "$sd"
 require 'record_update_download' "$nand"
-require 'raw.githubusercontent.com%2FBlackF1re%2Fatlantian%2Fimage-download-metrics%2Fimage-downloads.json' "$readme"
-require 'query=%24.downloads&label=image%20downloads' "$readme"
+require 'blackf1re.github.io%2Fatlantian%2Fimage-downloads.json' "$readme"
+require 'query=%24.imageDownloads&label=image%20downloads' "$readme"
+require 'query=%24.systemUpdates&label=system%20updates' "$readme"
 reject 'github/downloads/BlackF1re/atlantian/total' "$readme"
-require '/atlantian-update.json.svg?displayAssetName=false&label=system%20updates' "$readme"
+reject '/atlantian-update.json.svg' "$readme"
 require 'atlantian-<release>.img.xz' "$readme"
 require 'atlantian-<release>.img.xz' "$quickstart"
 require 'atlantian-<release>.img.xz' "$installation"
