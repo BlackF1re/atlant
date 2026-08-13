@@ -10,7 +10,7 @@ documented in [Debian lifecycle](DEBIAN-LIFECYCLE.md).
 
 | Trigger | Build | Publish |
 |---|---|---|
-| push to `main` touching a source/build-input path | yes | yes, automatically |
+| push to `main` touching a source/build-input path | after 5 qualifying commits | yes, automatically |
 | Debian Watch dispatch (`origin=debian-watch`) | yes | yes, automatically |
 | manual `workflow_dispatch`, `publish=false` | yes | no |
 | manual `workflow_dispatch`, `publish=true` | yes or reuse | yes |
@@ -29,6 +29,13 @@ systemd/**
 
 Documentation and workflow-only maintenance are intentionally excluded from the
 full release-build path.
+
+Automatic publication batches five qualifying commits since the last release.
+This prevents documentation, release-presentation and small incremental source
+changes from each producing a new large image. A manual dispatch with
+`publish=true`, and the Debian Watch path, bypass this batch threshold when an
+immediate verified release is needed. `scripts/generate-release-notes.sh` is
+explicitly excluded because it changes presentation only, not the image.
 
 A newer run on the same ref cancels an older in-progress release run. Publication
 also requires the built SHA to still be the current `main` tip.

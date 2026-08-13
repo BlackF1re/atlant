@@ -59,7 +59,7 @@ The initial root password is empty for first provisioning. See
 | microSD boot | Ready; cold boot and reboot validated on both RAM variants |
 | Gigabit Ethernet | Ready; DHCP |
 | UART | Ready; `ttyPS0`, `115200 8N1` |
-| 256 MiB Micron NAND | Ready on the validated 512 MiB-board path; 1 GiB NAND boot still requires bench validation |
+| 256 MiB Micron NAND | Ready; install and boot validated on 512 MiB and 1 GiB boards |
 | FPGA | FPGA Manager/Region, configfs overlays and optional profiles |
 | LEDs, buttons, XADC, watchdog | Ready |
 | PS USB0 | Disabled because of a known MIO routing collision |

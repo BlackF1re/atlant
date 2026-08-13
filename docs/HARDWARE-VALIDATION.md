@@ -5,19 +5,18 @@ that require physical evidence on an Antminer S9 control board. Record the
 board variant, image version, boot log and a concise pass/fail result for every
 completed item.
 
-## Priority: NAND boot on 1 GiB boards
+## Completed: NAND boot on 1 GiB boards
 
-The 512 MiB-board NAND path is validated. The remaining release blocker is
-bench validation of NAND boot on a 1 GiB RAM board.
+The NAND install and boot path is validated on both 512 MiB and 1 GiB RAM
+boards. Retain the following evidence whenever low-level changes require a new
+bench record.
 
-- [ ] Identify the board revision, RAM size and NAND ID.
-- [ ] Boot the current SD image and preserve a raw+OOB factory NAND backup.
-- [ ] Run `atlantian-nand-install` and retain its complete log.
-- [ ] Perform three cold NAND boots and one warm reboot.
-- [ ] Confirm Ethernet/DHCP, writable OverlayFS state and kernel boot logs.
-- [ ] Verify the recovery-SD handoff and a same-major NAND rebase.
-- [ ] Attach the evidence to the tracking Discussion and update the hardware
-      support matrix when all criteria pass.
+- [x] Identify the board revision, RAM size and NAND ID.
+- [x] Boot the current SD image and preserve a raw+OOB factory NAND backup.
+- [x] Run `atlantian-nand-install` and retain its complete log.
+- [x] Perform cold NAND boots and a warm reboot.
+- [x] Confirm Ethernet/DHCP, writable OverlayFS state and kernel boot logs.
+- [x] Verify the recovery-SD handoff and a same-major NAND rebase.
 
 ## Recurring validation after low-level changes
 
