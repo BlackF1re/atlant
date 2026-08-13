@@ -1,20 +1,27 @@
 ---
 name: Feature request
-about: Suggest an idea for this project
-title: ''
-labels: ''
+about: Propose a focused improvement to AtlANTian
+title: '[Proposal] '
+labels: 'status: needs triage'
 assignees: ''
 
 ---
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+## Area
 
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
+Select one: system software / FPGA / hardware / documentation / tooling.
 
-**Describe alternatives you've considered**
-A clear and concise description of any alternative solutions or features you've considered.
+## Problem or use case
 
-**Additional context**
-Add any other context or screenshots about the feature request here.
+What becomes easier, safer or more useful with this change?
+
+## Proposed outcome
+
+Describe the smallest useful result, not a full implementation plan.
+
+## Alternatives considered
+
+## Hardware or compatibility impact
+
+State any affected board variants, pins, boot modes or external dependencies;
+write "none known" if there are none.

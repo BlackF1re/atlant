@@ -1,38 +1,39 @@
 ---
 name: Bug report
-about: Create a report to help us improve
-title: ''
-labels: ''
+about: Report a reproducible problem with AtlANTian
+title: '[Bug] '
+labels: 'status: needs triage'
 assignees: ''
 
 ---
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+## What happened?
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+Describe the observed behaviour and why it is a problem.
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+## How can it be reproduced?
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
+1. …
+2. …
+3. …
 
-**Desktop (please complete the following information):**
- - OS: [e.g. iOS]
- - Browser [e.g. chrome, safari]
- - Version [e.g. 22]
+## What did you expect instead?
 
-**Smartphone (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
- - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
+## System details
 
-**Additional context**
-Add any other context about the problem here.
+- AtlANTian version:
+- Boot/storage mode: SD / NAND
+- Board RAM: 512 MiB / 1 GiB / unknown
+- Hardware revision or NAND model, if known:
+- Connected peripherals or FPGA profile:
+
+## Relevant logs
+
+Paste the smallest relevant excerpt from UART, `journalctl`, or the command
+output. Remove credentials, IP addresses and other private data first.
+
+```
+
+```
+
+## Additional context

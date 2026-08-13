@@ -201,6 +201,7 @@ See [Pipeline](docs/PIPELINE.md) for the CI/release contract.
 - [Persistence](docs/PERSISTENCE.md)
 - [Debian lifecycle](docs/DEBIAN-LIFECYCLE.md)
 - [Hardware support matrix](docs/hardware-support-matrix.md)
+- [Hardware validation plan](docs/HARDWARE-VALIDATION.md)
 - [Build and release pipeline](docs/PIPELINE.md)
 - [Security](SECURITY.md)
 
