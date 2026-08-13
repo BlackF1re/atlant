@@ -138,7 +138,6 @@ def validate_workflows() -> None:
         fail("build-release.yml: manual publish must be explicit and default to false")
 
     ordered_release_steps = [
-        "Check release state",
         "Validate source contracts",
         "Validate release inputs",
         "Build root filesystems",
@@ -150,57 +149,42 @@ def validate_workflows() -> None:
         "Test SD upgrade",
         "Test NAND rebase",
         "Verify source tree integrity",
-        "Check publication eligibility",
+        "Seal verified artifact",
+        "Attest verified build",
+        "Upload verified artifact",
     ]
-    actual_names = [step.get("name") for step in job_steps(build, "release")]
+    actual_names = [step.get("name") for step in job_steps(build, "build")]
     positions = []
     for name in ordered_release_steps:
         if name not in actual_names:
-            fail(f"build-release.yml: missing release stage {name!r}")
+            fail(f"build-release.yml: missing build stage {name!r}")
         positions.append(actual_names.index(name))
     if positions != sorted(positions):
-        fail("build-release.yml: release stages are out of order")
+        fail("build-release.yml: build stages are out of order")
 
-    release_state = step_named(build, "release", "Check release state")
-    state_run = str(release_state.get("run", ""))
-    require_run(release_state, "gh release view", "release state inspection")
-    require_run(release_state, 'gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG"', "authenticated tag source inspection")
-    require_run(release_state, "published-current", "idempotent current-release state")
-    require_run(release_state, "published-other", "immutable prior-release state")
-    require_run(release_state, "GITHUB_OUTPUT", "release state outputs")
-    if "exit 1" in state_run:
-        fail("build-release.yml: release-state discovery must never fail merely because a tag or Release already exists")
-    if "git ls-remote" in state_run or "git fetch" in state_run:
-        fail("build-release.yml: release-state discovery must not require persisted Git credentials")
-
-    rootfs_step = step_named(build, "release", "Build root filesystems")
-    kernel_step = step_named(build, "release", "Build Linux kernel")
-    artifacts_step = step_named(build, "release", "Build release artifacts")
+    rootfs_step = step_named(build, "build", "Build root filesystems")
+    kernel_step = step_named(build, "build", "Build Linux kernel")
+    artifacts_step = step_named(build, "build", "Build release artifacts")
     require_run(rootfs_step, "bash ./scripts/build-incremental.sh rootfs", "archive-safe rootfs stage")
     require_run(kernel_step, "bash ./scripts/build-incremental.sh kernel", "archive-safe kernel stage")
     require_run(artifacts_step, "bash ./scripts/build-incremental.sh artifacts", "archive-safe artifact stage")
-    require_run(step_named(build, "release", "Validate release artifacts"), "test-release-artifacts.sh", "artifact validation")
-    require_run(step_named(build, "release", "Test SD upgrade"), "test-release-upgrade.sh", "SD release-upgrade gate")
-    require_run(step_named(build, "release", "Test NAND rebase"), "test-nand-rebase.sh", "NAND rebase gate")
-    require_run(step_named(build, "release", "Verify source tree integrity"), "git diff --exit-code", "source integrity gate")
+    require_run(step_named(build, "build", "Validate release artifacts"), "test-release-artifacts.sh", "artifact validation")
+    require_run(step_named(build, "build", "Test SD upgrade"), "test-release-upgrade.sh", "SD release-upgrade gate")
+    require_run(step_named(build, "build", "Test NAND rebase"), "test-nand-rebase.sh", "NAND rebase gate")
+    require_run(step_named(build, "build", "Verify source tree integrity"), "git diff --exit-code", "source integrity gate")
 
-    publication = step_named(build, "release", "Check publication eligibility")
+    publication = step_named(build, "publish", "Check publication eligibility")
     publication_run = str(publication.get("run", ""))
-    require_run(publication, "RELEASE_STATE", "publication state propagation")
-    require_run(publication, "published-other", "published release idempotent no-op")
+    require_run(publication, "ALREADY_PUBLISHED", "publication state propagation")
     require_run(publication, "publish=false", "publication no-op result")
     require_run(publication, 'gh api "repos/$GITHUB_REPOSITORY/commits/main"', "authenticated main-tip verification")
     if "git fetch" in publication_run:
         fail("build-release.yml: publication eligibility must not require persisted Git credentials")
 
-    publish_step = step_named(build, "release", "Publish GitHub release")
+    publish_step = step_named(build, "publish", "Publish GitHub release")
     publish_run = str(publish_step.get("run", ""))
     require_run(publish_step, "gh release view", "publication race gate")
     require_run(publish_step, 'gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG"', "authenticated publication tag inspection")
-    require_run(publish_step, "gh release upload", "partial publication reconciliation")
-    require_run(publish_step, "--clobber", "partial publication reconciliation")
-    require_run(publish_step, "gh api --method PATCH", "unattached tag repair")
-    require_run(publish_step, "-F force=true", "unattached tag repair force guard")
     require_run(publish_step, "gh release create", "release publication")
     if "git ls-remote" in publish_run or "git fetch" in publish_run:
         fail("build-release.yml: publication must not require persisted Git credentials")
