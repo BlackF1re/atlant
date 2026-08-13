@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -28,15 +28,28 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Collect public download metrics
+      - name: Sum public download metrics
+        id: metric
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           releases="$RUNNER_TEMP/atlantian-releases.json"
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$releases"
+          image_downloads=$(jq '[.[][] | .assets[] | select(.name | test("^atlantian-[^/]+\\.img\\.xz$")) | .download_count] | add // 0' "$releases")
+          system_updates=$(jq '[.[][] | .assets[] | select(.name == "atlantian-update.json") | .download_count] | add // 0' "$releases")
+          printf 'image_downloads=%s\n' "$image_downloads" >>"$GITHUB_OUTPUT"
+          printf 'system_updates=%s\n' "$system_updates" >>"$GITHUB_OUTPUT"
+
+      - name: Create Pages payload
+        env:
+          IMAGE_DOWNLOADS: ${{ steps.metric.outputs.image_downloads }}
+          SYSTEM_UPDATES: ${{ steps.metric.outputs.system_updates }}
+        run: |
+          set -euo pipefail
+          releases="$RUNNER_TEMP/atlantian-releases.json"
           mkdir -p site
-          python3 - "$releases" >site/image-downloads.json <<'PY'
+          python3 - "$releases" "$IMAGE_DOWNLOADS" "$SYSTEM_UPDATES" >site/image-downloads.json <<'PY'
           import hashlib
           import json
           import sys
@@ -44,10 +57,9 @@ jobs:
 
           with open(sys.argv[1], encoding="utf-8") as stream:
               pages = json.load(stream)
-
+          image_downloads = int(sys.argv[2])
+          system_updates = int(sys.argv[3])
           releases = [release for page in pages for release in page]
-          image_downloads = 0
-          system_updates = 0
           asset_downloads = {}
           asset_index = {}
 
@@ -60,14 +72,9 @@ jobs:
                   name = asset.get("name") or ""
                   if not name:
                       continue
-                  downloads = int(asset.get("download_count") or 0)
                   key = "a" + hashlib.sha256(f"{tag}\n{name}".encode()).hexdigest()
-                  asset_downloads[key] = downloads
+                  asset_downloads[key] = int(asset.get("download_count") or 0)
                   indexed_assets[name] = key
-                  if name.startswith("atlantian-") and name.endswith(".img.xz"):
-                      image_downloads += downloads
-                  if name == "atlantian-update.json":
-                      system_updates += downloads
               asset_index[tag] = indexed_assets
 
           payload = {
@@ -102,6 +109,14 @@ jobs:
         # v4.0.5
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
 
+  backfill:
+    name: Backfill release artifact tables
+    needs: refresh
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
       - name: Backfill artifact download columns
         env:
           GH_TOKEN: ${{ github.token }}
@@ -112,6 +127,7 @@ jobs:
           owner=${GITHUB_REPOSITORY%%/*}
           repo=${GITHUB_REPOSITORY#*/}
           metrics_url="https://${owner,,}.github.io/${repo}/image-downloads.json"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$releases"
           rm -rf "$patches"
           mkdir -p "$patches"
 
