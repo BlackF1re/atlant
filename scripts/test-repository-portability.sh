@@ -36,36 +36,42 @@ if grep -Eq '^[[:space:]]*(run:[[:space:]]*)?(sudo[[:space:]]+-E[[:space:]]+)?\.
   fail 'build-release.yml contains a direct repository-script execution that depends on executable mode bits'
 fi
 
-# Release-state reads must use the authenticated API instead of the checkout's
-# origin. Checkout credentials are deliberately not persisted, and a fresh
-# repository may be private.
+# Release-state discovery must use the authenticated GitHub API instead of the
+# checkout origin. Checkout credentials are deliberately not persisted, and a
+# fresh repository may be private.
+require 'gh api "repos/$GITHUB_REPOSITORY/commits/$release_tag"' "$workflow"
 require 'gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG"' "$workflow"
 require 'gh api "repos/$GITHUB_REPOSITORY/commits/main"' "$workflow"
 
-# Discovery of pre-existing GitHub state is diagnostic. A stale tag or an
-# already-published release must never make the build fail before validation.
-state_block=$(awk '
-  /- name: Check release state/ { in_block=1 }
-  /- name: Validate source contracts/ { in_block=0 }
-  in_block { print }
-' "$workflow")
-[[ -n $state_block ]] || fail 'cannot locate Check release state block'
-if grep -Fq 'exit 1' <<<"$state_block"; then
-  fail 'Check release state must not fail merely because a tag or Release already exists'
-fi
-if grep -Eq 'git[[:space:]]+(ls-remote|fetch)' <<<"$state_block"; then
-  fail 'Check release state must not require persisted Git credentials'
-fi
-grep -Fq 'published-current' <<<"$state_block" || fail 'missing published-current idempotent state'
-grep -Fq 'published-other' <<<"$state_block" || fail 'missing published-other immutable state'
-grep -Fq 'tag-other' <<<"$state_block" || fail 'missing orphan-tag recovery state'
+# The plan job owns idempotency and verified-build reuse. Reuse is scoped to the
+# exact source SHA so a publication retry cannot silently consume another build.
+require '- name: Find reusable verified build' "$workflow"
+require 'artifact_name="atlantian-verified-${GITHUB_SHA}"' "$workflow"
+require 'gh api --method GET "repos/$GITHUB_REPOSITORY/actions/artifacts"' "$workflow"
+require 'select(.expired == false and .workflow_run.head_sha == env.GITHUB_SHA)' "$workflow"
+require 'already_published=true' "$workflow"
+require 'build_required=false' "$workflow"
+require 'Reusing verified artifact $artifact_name from workflow run $reuse_run_id.' "$workflow"
 
-# A same-source partial publication is recoverable and an unattached stale tag
-# is repaired only at the final publication boundary.
-require 'gh release upload "$RELEASE_TAG"' "$workflow"
-require '--clobber' "$workflow"
-require 'gh api --method PATCH' "$workflow"
-require '-F force=true' "$workflow"
+# Publication is immutable. A stale tag/release owned by another source is a hard
+# conflict; the workflow must never recover by retargeting history. A superseded
+# main revision also cannot publish.
+require '- name: Check publication eligibility' "$workflow"
+require 'This build was superseded by a newer main commit; publication is skipped.' "$workflow"
+require 'Release $RELEASE_TAG belongs to another source revision' "$workflow"
+require 'Tag $RELEASE_TAG already points to $tag_commit; automatic publication will never retarget an existing tag.' "$workflow"
+if grep -Fq 'gh api --method PATCH' "$workflow" || grep -Fq -- '-F force=true' "$workflow"; then
+  fail 'build-release.yml must not retarget an existing release tag'
+fi
+
+# A verified artifact must carry the exact source/version markers and publication
+# must re-check them after download before creating the GitHub Release.
+require 'gh run download "$source_run"' "$workflow"
+require 'test "$(cat artifacts/current/VERIFIED-SOURCE-SHA)" = "$GITHUB_SHA"' "$workflow"
+require 'test "$(cat artifacts/current/VERIFIED-VERSION)" = "$ATLANTIAN_VERSION"' "$workflow"
+require 'gh release create "$RELEASE_TAG"' "$workflow"
+require '--target "$GITHUB_SHA"' "$workflow"
+require 'Release $RELEASE_TAG appeared concurrently for this source; treating publication as successful.' "$workflow"
 
 # Exercise release stamping with an arbitrary GitHub repository identity. This
 # catches accidental reintroduction of the historical repository URL.
@@ -108,4 +114,4 @@ ATLANTIAN_GITHUB_REPO='another-owner/another-repo'
 [[ $ATLANTIAN_GITHUB_REPO == 'another-owner/another-repo' ]] \
   || fail 'runtime release configuration overwrote an explicit repository identity'
 
-echo 'fresh-repository release discovery, archive-safe invocation/package construction, private-repo API access, Git-origin inference, publication recovery and repository stamping passed'
+echo 'fresh-repository release planning, exact-SHA artifact reuse, immutable publication, archive-safe invocation, Git-origin inference and repository stamping passed'
