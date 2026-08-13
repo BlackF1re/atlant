@@ -113,6 +113,11 @@ A required build performs the full expensive path:
 - source-tree integrity check;
 - Sigstore/GitHub build provenance attestation.
 
+The SD upgrade integration test resolves an older published release by tag, but
+loads its image from the matching SHA-sealed GitHub Actions artifact. It never
+downloads the public Release image, so CI does not inflate user-facing download
+metrics.
+
 The build then adds:
 
 ```text
@@ -121,7 +126,7 @@ VERIFIED-VERSION
 ```
 
 and uploads `atlantian-verified-<full-source-SHA>` as a workflow artifact with a
-7-day retention period.
+90-day retention period.
 
 A failed publication therefore does not erase the successful build result. A
 later publish retry for the same SHA can download, verify and reuse the sealed
@@ -138,7 +143,9 @@ Publication is allowed only when:
 - the target release/tag does not belong to another source revision.
 
 Before upload, CI verifies the artifact's source marker, version marker,
-`SHA256SUMS`, image count and exact three-package `.deb` set.
+`SHA256SUMS`, image count and exact three-package `.deb` set. Production releases
+publish the image under the stable public name `atlantian.img` and add a tiny
+`atlantian-update.json` marker used only for anonymous aggregate update counts.
 
 Existing release history is never rewritten automatically:
 
@@ -151,11 +158,12 @@ Existing release history is never rewritten automatically:
 
 | Artifact | Purpose |
 |---|---|
-| `atlantian-<release>.img` | SD system and matching NAND installer/recovery source |
+| `atlantian.img` | SD system and matching NAND installer/recovery source; stable name enables aggregate image-download metrics |
 | `atlantian-nand-<release>.tar.zst` | checksummed NAND raw-boot + SquashFS payload |
 | three version-matched `.deb` files | AtlANTian platform/kernel/release updates |
 | `RELEASE-METADATA.json` | release, Debian Snapshot, source and measured storage metadata |
 | `SHA256SUMS` | public payload hashes |
+| `atlantian-update.json` | best-effort anonymous update-transaction counter marker; not trusted update payload |
 
 The SD filesystem is not copied wholesale into NAND.
 

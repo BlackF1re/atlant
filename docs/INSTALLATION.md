@@ -1,17 +1,19 @@
 # Installing AtlANTian
 
-AtlANTian publishes one ready-to-flash image:
+AtlANTian publishes one ready-to-flash image with a stable public filename:
 
 ```text
-atlantian-<release>.img
+atlantian.img
 ```
 
-It is the normal microSD system and the matching installer/recovery source for
-on-board NAND. The physical boot-source jumper selects which medium BootROM uses.
+The release tag and `RELEASE-METADATA.json` carry the exact AtlANTian version.
+The image is the normal microSD system and the matching installer/recovery source
+for on-board NAND. The physical boot-source jumper selects which medium BootROM
+uses.
 
 ## Install to microSD
 
-1. Download the image and `SHA256SUMS` from the release page.
+1. Download `atlantian.img` and `SHA256SUMS` from the release page.
 2. Verify the image:
 
    ```sh

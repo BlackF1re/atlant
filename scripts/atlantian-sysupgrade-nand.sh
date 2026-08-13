@@ -18,6 +18,36 @@ get() { sed -n "s/^$1=//p" "$STATE" 2>/dev/null | head -n1; }
 current() { cat /usr/lib/atlantian/version 2>/dev/null || true; }
 major_of() { v=${1%%.*}; case "$v" in ''|*[!0-9]*) return 1;; esac; printf '%s\n' "$v"; }
 human_size() { numfmt --to=iec-i --suffix=B "$1" 2>/dev/null || printf '%s bytes' "$1"; }
+record_update_download() {
+    # Anonymous aggregate metric. Cache the stable marker with this target so a
+    # normal retry/resume of the same NAND transaction does not count again.
+    stage=$1
+    target=$2
+    name=$(get update_name 2>/dev/null || true)
+    url=$(get update_url 2>/dev/null || true)
+    [ "$name" = atlantian-update.json ] && [ -n "$url" ] || return 0
+    marker="$stage/atlantian-update.json"
+    if [ -s "$marker" ] && jq -e --arg release "$target" \
+        '.schema_version == 1 and .kind == "atlantian-system-update" and .release == $release' \
+        "$marker" >/dev/null 2>&1; then
+        return 0
+    fi
+    tmp="$marker.new"
+    rm -f "$tmp"
+    if ! curl -fL --retry 3 --connect-timeout 20 -sS -o "$tmp" "$url"; then
+        rm -f "$tmp"
+        echo 'Warning: update activity marker could not be recorded; continuing without telemetry.' >&2
+        return 0
+    fi
+    if ! jq -e --arg release "$target" \
+        '.schema_version == 1 and .kind == "atlantian-system-update" and .release == $release' \
+        "$tmp" >/dev/null 2>&1; then
+        rm -f "$tmp"
+        echo 'Warning: update activity marker was invalid; continuing without telemetry.' >&2
+        return 0
+    fi
+    mv -f "$tmp" "$marker"
+}
 
 usage() {
     cat <<'EOF_USAGE'
@@ -100,6 +130,7 @@ stage_release() {
     stage="$CARD_ROOT/$STAGE_REL/$target"
     bundle_dir="$stage/bundle"
     mkdir -p "$stage" "$bundle_dir" "$CARD_ROOT/var/lib/atlantian"
+    record_update_download "$stage" "$target"
     available=$(df -Pk "$CARD_ROOT" | awk 'NR==2 {print $4*1024}')
     required=$((bundle_size + 64*1024*1024))
     [ "$available" -ge "$required" ] || {

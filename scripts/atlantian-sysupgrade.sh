@@ -23,6 +23,36 @@ major_of() {
   printf '%s\n' "$value"
 }
 human_size() { numfmt --to=iec-i --suffix=B "$1" 2>/dev/null || printf '%s bytes' "$1"; }
+record_update_download() {
+  # Anonymous aggregate metric: one tiny, stable Release asset is fetched when a
+  # real update transaction starts. It carries no device identifier and is
+  # cached per target so a normal resume/retry does not count again.
+  name=$(get update_name 2>/dev/null || true)
+  url=$(get update_url 2>/dev/null || true)
+  [ "$name" = atlantian-update.json ] && [ -n "$url" ] || return 0
+  version=$(get version)
+  marker=$STAGE/atlantian-update.json
+  if [ -s "$marker" ] && jq -e --arg release "$version" \
+    '.schema_version == 1 and .kind == "atlantian-system-update" and .release == $release' \
+    "$marker" >/dev/null 2>&1; then
+    return 0
+  fi
+  tmp=$marker.new
+  rm -f "$tmp"
+  if ! curl -fL --retry 3 --connect-timeout 20 -sS -o "$tmp" "$url"; then
+    rm -f "$tmp"
+    echo 'Warning: update activity marker could not be recorded; continuing without telemetry.' >&2
+    return 0
+  fi
+  if ! jq -e --arg release "$version" \
+    '.schema_version == 1 and .kind == "atlantian-system-update" and .release == $release' \
+    "$tmp" >/dev/null 2>&1; then
+    rm -f "$tmp"
+    echo 'Warning: update activity marker was invalid; continuing without telemetry.' >&2
+    return 0
+  fi
+  mv -f "$tmp" "$marker"
+}
 apt_full_upgrade() {
   apt-get update
   apt-get -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' full-upgrade -y
@@ -81,6 +111,7 @@ verify_staged_version() {
 download_and_verify() {
   mkdir -p "$STAGE"
   rm -f "$STAGE"/*.deb "$STAGE/SHA256SUMS"
+  record_update_download
   total=$(( $(get platform_size) + $(get kernel_size) + $(get release_size) ))
   available=$(df -Pk "$STAGE" | awk 'NR == 2 { print $4 * 1024 }')
   required=$((total + 32 * 1024 * 1024))

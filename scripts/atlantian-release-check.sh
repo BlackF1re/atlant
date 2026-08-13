@@ -132,6 +132,9 @@ platform=$(package_asset "$json" "$version" atlantian-platform all)
 kernel=$(package_asset "$json" "$version" atlantian-kernel armhf)
 releasepkg=$(package_asset "$json" "$version" atlantian-release all)
 sums=$(asset "$json" SHA256SUMS)
+# Optional, anonymous update-accounting marker. It is deliberately not required
+# for release completeness so older repositories/releases remain upgradeable.
+update_marker=$(asset "$json" atlantian-update.json)
 [ -n "$platform" ] && [ -n "$kernel" ] && [ -n "$releasepkg" ] && [ -n "$sums" ] || { echo 'selected release has no complete, version-matched package set' >&2; exit 1; }
 
 tab=$(printf '\t')
@@ -147,16 +150,23 @@ EOF_RELEASE
 IFS="$tab" read -r sums_name sums_url sums_size <<EOF_SUMS
 $sums
 EOF_SUMS
+update_name= update_url= update_size=
+if [ -n "$update_marker" ]; then
+  IFS="$tab" read -r update_name update_url update_size <<EOF_UPDATE
+$update_marker
+EOF_UPDATE
+fi
 
 mkdir -p "$STATE_DIR"
 tmp=$(mktemp "$STATE_DIR/.available.XXXXXX"); notes_tmp=$(mktemp "$STATE_DIR/.notes.XXXXXX")
 trap 'rm -f "$tmp" "$notes_tmp"' EXIT
 printf '%s\n' "$notes" >"$notes_tmp"
-printf 'version=%s\nrelease_id=%s\ntag=%s\npublished_at=%s\nplatform_name=%s\nplatform_url=%s\nplatform_size=%s\nkernel_name=%s\nkernel_url=%s\nkernel_size=%s\nrelease_name=%s\nrelease_url=%s\nrelease_size=%s\nsums_name=%s\nsums_url=%s\nsums_size=%s\n' \
+printf 'version=%s\nrelease_id=%s\ntag=%s\npublished_at=%s\nplatform_name=%s\nplatform_url=%s\nplatform_size=%s\nkernel_name=%s\nkernel_url=%s\nkernel_size=%s\nrelease_name=%s\nrelease_url=%s\nrelease_size=%s\nsums_name=%s\nsums_url=%s\nsums_size=%s\nupdate_name=%s\nupdate_url=%s\nupdate_size=%s\n' \
   "$version" "$version" "$tag" "$published" \
   "$platform_name" "$platform_url" "$platform_size" \
   "$kernel_name" "$kernel_url" "$kernel_size" \
   "$release_name" "$release_url" "$release_size" \
-  "$sums_name" "$sums_url" "$sums_size" >"$tmp"
+  "$sums_name" "$sums_url" "$sums_size" \
+  "$update_name" "$update_url" "$update_size" >"$tmp"
 mv "$tmp" "$STATE_FILE"; mv "$notes_tmp" "$NOTES_FILE"
 echo "AtlANTian update available: $installed -> $tag"

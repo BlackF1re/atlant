@@ -13,7 +13,7 @@ quick-start path.
 | Power | external 12 V board supply |
 | Network | Ethernet with DHCP |
 | Console | optional 3.3 V USB-UART, `115200 8N1` |
-| Image | current `atlantian-<release>.img` + `SHA256SUMS` |
+| Image | current `atlantian.img` + `SHA256SUMS` |
 
 > [!CAUTION]
 > UART is **3.3 V logic**. Do not connect 5 V UART logic.
@@ -27,7 +27,7 @@ sha256sum -c SHA256SUMS --ignore-missing
 Optional GitHub provenance verification:
 
 ```sh
-gh attestation verify atlantian-*.img --repo OWNER/REPOSITORY
+gh attestation verify atlantian.img --repo OWNER/REPOSITORY
 ```
 
 Use the repository that published the image. It is also recorded inside the
@@ -40,7 +40,7 @@ system as `ATLANTIAN_RELEASE_REPOSITORY`.
 **Linux:**
 
 ```sh
-sudo dd if=atlantian-*.img of=/dev/sdX bs=8M status=progress conv=fsync
+sudo dd if=atlantian.img of=/dev/sdX bs=8M status=progress conv=fsync
 sync
 ```
 

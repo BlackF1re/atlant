@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Release-upgrade gate: install the newly built AtlANTian packages into the
-# newest eligible published SD release and verify that persistent state survives.
+# newest eligible published SD release whose verified Actions artifact is still
+# retained, then verify that persistent state survives. Public Release assets
+# are intentionally never downloaded here so CI cannot pollute download metrics.
 set -euo pipefail
 
 ARTIFACT_DIR=${1:?artifact directory}
@@ -19,7 +21,7 @@ fi
 
 fail() { printf 'release upgrade: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "required command is missing: $1"; }
-for cmd in curl python3 jq dpkg dpkg-deb sha256sum losetup mount umount mountpoint parted e2fsck resize2fs chroot cmp awk truncate update-binfmts; do
+for cmd in curl gh python3 jq dpkg dpkg-deb sha256sum losetup mount umount mountpoint parted e2fsck resize2fs chroot cmp awk truncate update-binfmts; do
   need "$cmd"
 done
 [[ $TARGET_MAJOR =~ ^[0-9]+$ ]] || fail 'target Debian major is not numeric'
@@ -60,7 +62,7 @@ cleanup() {
   rm -rf "$WORK"
 }
 trap cleanup EXIT
-mkdir -p "$ROOTFS" "$WORK/download"
+mkdir -p "$ROOTFS" "$WORK/source"
 
 api_headers=(-H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28')
 if [[ -n ${GH_TOKEN:-${GITHUB_TOKEN:-}} ]]; then
@@ -71,66 +73,72 @@ curl -fsSL --retry 3 --connect-timeout 20 "${api_headers[@]}" \
 
 SOURCE_TAG=
 SOURCE_VERSION=
+SOURCE_SHA=
+SOURCE_RUN_ID=
+SOURCE_ARTIFACT_NAME=
 while IFS= read -r tag; do
   [[ $tag == v* ]] || continue
   version=${tag#v}
   canonical_version "$version" || continue
   version_lt "$version" "$TARGET_VERSION" || continue
+  if [[ -n $SOURCE_VERSION ]] && ! version_lt "$SOURCE_VERSION" "$version"; then
+    continue
+  fi
+
   release_json=$(jq -c --arg tag "$tag" '.[] | select(.draft == false and .tag_name == $tag)' "$WORK/releases.json" | head -n1)
   [[ -n $release_json ]] || continue
-  image_name="atlantian-$version.img"
-  for required in "$image_name" RELEASE-METADATA.json SHA256SUMS; do
-    printf '%s' "$release_json" | jq -e --arg name "$required" '.assets[] | select(.name == $name)' >/dev/null || { release_json=; break; }
-  done
-  [[ -n $release_json ]] || continue
-  if [[ -z $SOURCE_VERSION ]] || version_lt "$SOURCE_VERSION" "$version"; then
-    SOURCE_TAG=$tag
-    SOURCE_VERSION=$version
-  fi
+  source_sha=$(gh api "repos/$REPO/commits/$tag" --jq .sha 2>/dev/null || true)
+  [[ $source_sha =~ ^[0-9a-f]{40}$ ]] || continue
+  artifact_name="atlantian-verified-${source_sha}"
+  run_id=$(
+    SOURCE_SHA_CANDIDATE="$source_sha" gh api --method GET "repos/$REPO/actions/artifacts" \
+      -f name="$artifact_name" \
+      -f per_page=100 \
+      --jq '[.artifacts[] | select(.expired == false and .workflow_run.head_sha == env.SOURCE_SHA_CANDIDATE)] | sort_by(.created_at) | last | .workflow_run.id // empty' \
+      2>/dev/null || true
+  )
+  [[ $run_id =~ ^[0-9]+$ ]] || continue
+
+  SOURCE_TAG=$tag
+  SOURCE_VERSION=$version
+  SOURCE_SHA=$source_sha
+  SOURCE_RUN_ID=$run_id
+  SOURCE_ARTIFACT_NAME=$artifact_name
 done < <(jq -r '.[] | select(.draft == false) | .tag_name // empty' "$WORK/releases.json")
 
 if [[ -z $SOURCE_TAG ]]; then
-  echo 'No eligible published source release exists; release-upgrade gate is not applicable yet.'
+  echo 'No eligible published source release has a retained verified Actions artifact; release-upgrade gate is not applicable.'
   exit 0
 fi
 
-mapfile -t asset_info < <(python3 - "$WORK/releases.json" "$SOURCE_TAG" "$SOURCE_VERSION" <<'PY'
-import json, sys
-path, wanted, version = sys.argv[1:]
-with open(path, encoding='utf-8') as f:
-    releases = json.load(f)
-release = next((r for r in releases if not r.get('draft') and r.get('tag_name') == wanted), None)
-if release is None:
-    raise SystemExit('selected source release disappeared from API response')
-assets = {a.get('name'): a.get('browser_download_url') for a in release.get('assets', [])}
-for name in (f'atlantian-{version}.img', 'RELEASE-METADATA.json', 'SHA256SUMS'):
-    url = assets.get(name)
-    if not url:
-        raise SystemExit(f'source release is missing canonical asset: {name}')
-    print(name + '\t' + url)
-PY
-)
-[[ ${#asset_info[@]} -eq 3 ]] || fail "cannot resolve assets for $SOURCE_TAG"
-IFS=$'\t' read -r image_name image_url <<<"${asset_info[0]}"
-IFS=$'\t' read -r metadata_name metadata_url <<<"${asset_info[1]}"
-IFS=$'\t' read -r sums_name sums_url <<<"${asset_info[2]}"
-
-IMAGE=$WORK/download/$image_name
-METADATA=$WORK/download/$metadata_name
-SUMS=$WORK/download/$sums_name
 echo "SD release upgrade gate: $SOURCE_TAG -> v$TARGET_VERSION"
-curl -fL --retry 3 --connect-timeout 20 -o "$IMAGE" "$image_url"
-curl -fL --retry 3 --connect-timeout 20 -o "$METADATA" "$metadata_url"
-curl -fL --retry 3 --connect-timeout 20 -o "$SUMS" "$sums_url"
-python3 - "$METADATA" "$SOURCE_VERSION" "$image_name" <<'PY'
-import json, sys
-path, version, image = sys.argv[1:]
+gh run download "$SOURCE_RUN_ID" \
+  --repo "$REPO" \
+  --name "$SOURCE_ARTIFACT_NAME" \
+  --dir "$WORK/source"
+
+[[ -s $WORK/source/VERIFIED-SOURCE-SHA ]] || fail 'source verified artifact has no source-SHA seal'
+[[ -s $WORK/source/VERIFIED-VERSION ]] || fail 'source verified artifact has no version seal'
+[[ $(cat "$WORK/source/VERIFIED-SOURCE-SHA") == "$SOURCE_SHA" ]] || fail 'source verified artifact SHA mismatch'
+[[ $(cat "$WORK/source/VERIFIED-VERSION") == "$SOURCE_VERSION" ]] || fail 'source verified artifact version mismatch'
+METADATA=$WORK/source/RELEASE-METADATA.json
+SUMS=$WORK/source/SHA256SUMS
+[[ -s $METADATA && -s $SUMS ]] || fail 'source verified artifact metadata/checksums are incomplete'
+
+image_name=$(python3 - "$METADATA" "$SOURCE_VERSION" <<'PY'
+import json, os, sys
+path, version = sys.argv[1:]
 with open(path, encoding='utf-8') as f:
     m = json.load(f)
 assert m['schema_version'] == 1
 assert m['release'] == version
-assert m['image'] == image
+image = m['image']
+assert image == os.path.basename(image) and image.endswith('.img')
+print(image)
 PY
+)
+IMAGE=$WORK/source/$image_name
+[[ -s $IMAGE ]] || fail "source verified artifact is missing image: $image_name"
 expected=$(awk -v name="$image_name" '$2 == name || $2 == "*" name { print $1; exit }' "$SUMS")
 [[ $expected =~ ^[0-9a-f]{64}$ ]] || fail "SHA256SUMS has no digest for $image_name"
 actual=$(sha256sum "$IMAGE" | awk '{print $1}')
@@ -213,4 +221,4 @@ if grep -qE '^ /etc/systemd/system/atlantian-.*\.(service|timer)( |$)' <<<"$new_
   fail 'atlantian-platform registers vendor systemd units as conffiles'
 fi
 
-echo "SD release upgrade gate passed: $SOURCE_TAG -> v$TARGET_VERSION"
+echo "SD release upgrade gate passed: $SOURCE_TAG -> v$TARGET_VERSION (verified Actions artifact $SOURCE_ARTIFACT_NAME)"

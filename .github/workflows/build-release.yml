@@ -135,6 +135,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     permissions:
+      actions: read
       contents: read
       id-token: write
       attestations: write
@@ -187,6 +188,12 @@ jobs:
           bash scripts/test-runtime-policy.sh
           bash scripts/test-source-contracts.sh
           bash scripts/test-update-leds.sh
+          bash scripts/test-release-metrics.sh
+
+      - name: Select stable public image name
+        run: |
+          set -euo pipefail
+          echo "ATLANTIAN_IMAGE_NAME=atlantian" >> "$GITHUB_ENV"
 
       - name: Validate release inputs
         id: inputs
@@ -338,7 +345,10 @@ jobs:
         with:
           name: ${{ needs.plan.outputs.artifact_name }}
           if-no-files-found: error
-          retention-days: 7
+          # The release-upgrade gate consumes a previous verified build without
+          # touching public Release assets. Keep enough history for infrequent
+          # release lines while staying within GitHub's normal retention limit.
+          retention-days: 90
           overwrite: true
           path: |
             artifacts/current/*.img
@@ -412,8 +422,10 @@ jobs:
           set -euo pipefail
           export ATLANTIAN_SOURCE_REVISION
           ATLANTIAN_SOURCE_REVISION=$(git rev-parse --short=12 "$GITHUB_SHA")
+          export ATLANTIAN_IMAGE_NAME=atlantian
           . config/release.env
           test "$ATLANTIAN_VERSION" = "$EXPECTED_VERSION"
+          test "$ATLANTIAN_IMAGE_NAME" = atlantian
           {
             echo "ATLANTIAN_SOURCE_REVISION=$ATLANTIAN_SOURCE_REVISION"
             echo "ATLANTIAN_SOURCE_ID=$ATLANTIAN_SOURCE_ID"
@@ -506,6 +518,34 @@ jobs:
         if: steps.publication.outputs.publish == 'true'
         run: bash scripts/generate-release-notes.sh "$RELEASE_TAG" "$GITHUB_SHA"
 
+      - name: Prepare aggregate update marker
+        if: steps.publication.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          python3 - "$ATLANTIAN_VERSION" > artifacts/current/atlantian-update.json <<'PY'
+          import json
+          import sys
+
+          json.dump({
+              "schema_version": 1,
+              "kind": "atlantian-system-update",
+              "release": sys.argv[1],
+          }, sys.stdout, separators=(",", ":"))
+          sys.stdout.write("\n")
+          PY
+          python3 - "$ATLANTIAN_VERSION" <<'PY'
+          import json
+          import sys
+
+          with open("artifacts/current/atlantian-update.json", encoding="utf-8") as stream:
+              marker = json.load(stream)
+          assert marker == {
+              "schema_version": 1,
+              "kind": "atlantian-system-update",
+              "release": sys.argv[1],
+          }
+          PY
+
       - name: Publish GitHub release
         if: steps.publication.outputs.publish == 'true'
         env:
@@ -518,6 +558,7 @@ jobs:
             artifacts/current/*.deb
             artifacts/current/RELEASE-METADATA.json
             artifacts/current/SHA256SUMS
+            artifacts/current/atlantian-update.json
           )
 
           tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha 2>/dev/null) || tag_commit=""
