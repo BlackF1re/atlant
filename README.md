@@ -1,6 +1,6 @@
 # AtlANTian GNU/Linux
 
-[![Latest Release](https://img.shields.io/github/v/release/BlackF1re/atlantian?include_prereleases&sort=semver&label=release)](https://github.com/BlackF1re/atlantian/releases) [![Build](https://github.com/BlackF1re/atlantian/actions/workflows/build-release.yml/badge.svg?branch=main)](https://github.com/BlackF1re/atlantian/actions/workflows/build-release.yml) [![Release Date](https://img.shields.io/github/release-date-pre/BlackF1re/atlantian?display_date=published_at&label=released)](https://github.com/BlackF1re/atlantian/releases) [![Debian Snapshot](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2FBlackF1re%2Fatlantian%2Frefs%2Fheads%2Fmain%2Fconfig%2Fdebian-snapshot.env&search=DEBIAN_SNAPSHOT_TIMESTAMP%3D(%5Cd%7B4%7D)(%5Cd%7B2%7D)(%5Cd%7B2%7D)T%5Cd%7B6%7DZ&replace=%241-%242-%243&label=Debian%20snapshot)](https://github.com/BlackF1re/atlantian/blob/main/config/debian-snapshot.env) [![Release Downloads](https://img.shields.io/github/downloads/BlackF1re/atlantian/total?label=release%20downloads)](https://github.com/BlackF1re/atlantian/releases) [![System Updates](https://img.shields.io/github/downloads/BlackF1re/atlantian/atlantian-update.json.svg?displayAssetName=false&label=system%20updates)](docs/UPGRADING.md)
+[![Latest Release](https://img.shields.io/github/v/release/BlackF1re/atlantian?include_prereleases&sort=semver&label=release)](https://github.com/BlackF1re/atlantian/releases) [![Build](https://github.com/BlackF1re/atlantian/actions/workflows/build-release.yml/badge.svg?branch=main)](https://github.com/BlackF1re/atlantian/actions/workflows/build-release.yml) [![Release Date](https://img.shields.io/github/release-date-pre/BlackF1re/atlantian?display_date=published_at&label=released)](https://github.com/BlackF1re/atlantian/releases) [![Debian Snapshot](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2FBlackF1re%2Fatlantian%2Frefs%2Fheads%2Fmain%2Fconfig%2Fdebian-snapshot.env&search=DEBIAN_SNAPSHOT_TIMESTAMP%3D(%5Cd%7B4%7D)(%5Cd%7B2%7D)(%5Cd%7B2%7D)T%5Cd%7B6%7DZ&replace=%241-%242-%243&label=Debian%20snapshot)](https://github.com/BlackF1re/atlantian/blob/main/config/debian-snapshot.env) [![Image Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FBlackF1re%2Fatlantian%2Fimage-download-metrics%2Fimage-downloads.json&query=%24.downloads&label=image%20downloads&cacheSeconds=3600)](https://github.com/BlackF1re/atlantian/releases) [![System Updates](https://img.shields.io/github/downloads/BlackF1re/atlantian/atlantian-update.json.svg?displayAssetName=false&label=system%20updates)](docs/UPGRADING.md)
 
 **AtlANTian** is a compact Debian-based GNU/Linux distribution for the Bitmain
 Antminer S9 control board. It turns the Xilinx Zynq-7010 into a general-purpose
@@ -116,12 +116,12 @@ atlantian-sysupgrade
 | AtlANTian base/kernel/boot | in-place `atlantian-sysupgrade` | stage verified NAND bundle on the paired recovery SD, then continue maintenance from SD |
 | Debian-major transition | explicit AtlANTian release-line transition | clean NAND reinstall |
 
-**Release Downloads** is GitHub's cumulative count for all public assets in all
-releases, so it does not reset when a new version is published. It includes image,
-package, checksum and metadata downloads; GitHub does not publish a corresponding
-all-history total for versioned image assets alone. **System Updates** aggregates
-downloads of the tiny stable `atlantian-update.json` marker when an actual
-AtlANTian update transaction starts. No device identifier is sent; these are
+**Image Downloads** is the cumulative sum of GitHub `download_count` values for
+only `atlantian-<release>.img.xz` assets across all releases. It is refreshed after
+a release is published and hourly, so it does not reset when a new version is
+published; package, checksum and metadata downloads are excluded. **System Updates**
+aggregates downloads of the tiny stable `atlantian-update.json` marker when an
+actual AtlANTian update transaction starts. No device identifier is sent; these are
 GitHub asset counters, not unique-user/device counts. GitHub and Shields may cache
 the displayed value briefly. CI validation uses private Actions artifacts and does
 not touch either counter.
