@@ -118,7 +118,7 @@ atlantian-sysupgrade
 
 Debian prerelease ordering is retained **inside** package metadata (for example
 `13.1.0~alpha.8-1`). Public GitHub asset filenames use `.` in place of `~`
-(for example `atlantian-kernel_13.1.0.alpha.8-1_armhf.deb`). The updater verifies
+(for example `atlantian-kernel_13.1.0.alpha.8-1_<arch>.deb`). The updater verifies
 the downloaded package's Package/Version/Architecture fields and public checksum;
 it does not infer package identity from the filename alone.
 
