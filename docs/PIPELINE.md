@@ -190,9 +190,10 @@ The SD filesystem is not copied wholesale into NAND.
 
 ## Download-counter isolation
 
-The README image badge reads GitHub's `download_count` for the versioned `.img.xz`
-asset in the newest published release. Because image filenames carry the release
-version, this is a current-image count rather than an all-history sum.
+The README **Release Downloads** badge uses GitHub's cumulative download counter
+for all public assets in all releases. It is not reset by a new release. GitHub
+does not provide a public all-history aggregate limited to versioned `.img.xz`
+assets, so the badge is deliberately not labelled as an image-only counter.
 
 The stable `atlantian-update.json` asset provides a separate aggregate counter for
 actual updater transactions. CI never downloads either public metric asset: old
