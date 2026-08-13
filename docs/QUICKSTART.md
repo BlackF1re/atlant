@@ -13,12 +13,14 @@ quick-start path.
 | Power | external 12 V board supply |
 | Network | Ethernet with DHCP |
 | Console | optional 3.3 V USB-UART, `115200 8N1` |
-| Image | current `atlantian.img` + `SHA256SUMS` |
+| Image | current `atlantian-<release>.img.xz` + `SHA256SUMS` |
 
 > [!CAUTION]
 > UART is **3.3 V logic**. Do not connect 5 V UART logic.
 
 ## 2. Verify the download
+
+Keep the `.img.xz` compressed while verifying it:
 
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing
@@ -27,7 +29,7 @@ sha256sum -c SHA256SUMS --ignore-missing
 Optional GitHub provenance verification:
 
 ```sh
-gh attestation verify atlantian.img --repo OWNER/REPOSITORY
+gh attestation verify atlantian-*.img.xz --repo OWNER/REPOSITORY
 ```
 
 Use the repository that published the image. It is also recorded inside the
@@ -35,16 +37,20 @@ system as `ATLANTIAN_RELEASE_REPOSITORY`.
 
 ## 3. Write the image
 
-**Windows:** use Rufus, Raspberry Pi Imager or Etcher in raw/DD mode.
+**Windows / graphical tools:** Rufus, Raspberry Pi Imager and Etcher can open the
+versioned `.img.xz` directly; select the whole microSD device and write in raw/DD
+mode where the tool asks.
 
-**Linux:**
+**Linux:** stream the XZ image directly into the whole card device:
 
 ```sh
-sudo dd if=atlantian.img of=/dev/sdX bs=8M status=progress conv=fsync
+xz -dc atlantian-*.img.xz | sudo dd of=/dev/sdX bs=8M status=progress conv=fsync
 sync
 ```
 
-Use the whole card device, not a partition.
+Use the whole card device, not a partition. The release also keeps the exact raw
+`.img` inside its verified CI artifact for regression testing, but only the
+smaller `.img.xz` is published for normal users.
 
 ## 4. First boot
 

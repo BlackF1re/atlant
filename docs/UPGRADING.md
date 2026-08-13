@@ -124,30 +124,30 @@ a platform rebase. AtlANTian refuses to replace the lower beneath an unavailable
 external upper. Normal NAND boot without the card may still use the independent
 internal upper.
 
-## Update download metrics
+## Download metrics
 
-Published releases use two stable assets for aggregate GitHub download counters:
+Every release publishes a versioned user image such as
+`atlantian-13.1.0-alpha.6.img.xz`. The **Image Downloads** badge reads GitHub's
+`download_count` for the `.img.xz` asset in the newest published release. It is
+therefore a count for the current image, not a sum across differently named
+historical images.
 
-- `atlantian.img` — ready-to-flash image downloads;
-- `atlantian-update.json` — update-transaction starts from AtlANTian systems.
-
-`atlantian-sysupgrade --check` and `--notes` do **not** download the update marker.
-After the user confirms an update (or uses `--yes`), the SD/NAND updater attempts
-to fetch it once and caches the valid marker for that target release. Failure to
-fetch or validate the marker never blocks the update.
+Every release also publishes the tiny stable `atlantian-update.json` marker.
+`atlantian-sysupgrade --check` and `--notes` do **not** download it. After the user
+confirms an update (or uses `--yes`), the SD/NAND updater attempts to fetch it once
+and caches the valid marker for that target release. Failure to fetch or validate
+the marker never blocks the update.
 
 No installation ID, serial number, IP-derived token or other device identifier is
-sent by AtlANTian. GitHub only records its normal aggregate Release-asset download
-count. Consequently **System Updates is not a unique-device counter** and does not
-prove that every started update completed successfully. Clearing the staging
-cache and retrying can also add another download.
+sent by AtlANTian. GitHub only records its normal Release-asset download count.
+Consequently **System Updates is not a unique-device counter** and does not prove
+that every started update completed successfully. Clearing the staging cache and
+retrying can also add another download.
 
-CI release-upgrade validation uses retained, SHA-sealed GitHub Actions artifacts
-rather than public Release assets, so production validation does not increase the
-image or system-update counters.
-
-The counters begin with releases that publish these stable assets; historical
-versioned-image downloads are intentionally not mixed into the new metrics.
+GitHub and Shields may cache a displayed count briefly, so a badge is not a
+real-time transaction meter. CI release-upgrade validation uses retained,
+SHA-sealed GitHub Actions artifacts rather than public Release assets, so
+production validation does not increase either user-facing counter.
 
 ## Debian-major transition
 

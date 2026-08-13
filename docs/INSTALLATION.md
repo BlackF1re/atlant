@@ -1,26 +1,29 @@
 # Installing AtlANTian
 
-AtlANTian publishes one ready-to-flash image with a stable public filename:
+AtlANTian publishes one versioned, ready-to-flash compressed image:
 
 ```text
-atlantian.img
+atlantian-<release>.img.xz
 ```
 
-The release tag and `RELEASE-METADATA.json` carry the exact AtlANTian version.
-The image is the normal microSD system and the matching installer/recovery source
-for on-board NAND. The physical boot-source jumper selects which medium BootROM
-uses.
+For example, release `13.1.0-alpha.6` publishes
+`atlantian-13.1.0-alpha.6.img.xz`. Decompression yields the exact raw disk image
+identified in `RELEASE-METADATA.json`. The same image is the normal microSD system
+and the matching installer/recovery source for on-board NAND. The physical
+boot-source jumper selects which medium BootROM uses.
 
 ## Install to microSD
 
-1. Download `atlantian.img` and `SHA256SUMS` from the release page.
-2. Verify the image:
+1. Download `atlantian-<release>.img.xz` and `SHA256SUMS` from the release page.
+2. Verify the compressed image:
 
    ```sh
    sha256sum -c SHA256SUMS --ignore-missing
    ```
 
-3. Flash the whole `.img` with Rufus, Raspberry Pi Imager, Etcher or `dd`.
+3. Flash the `.img.xz` directly with Rufus, Raspberry Pi Imager or Etcher. On
+   Linux, use `xz -dc ... | sudo dd ...` as shown in
+   [SD Quick Start](QUICKSTART.md).
 4. Select physical **SD** boot, insert the card and power the board.
 5. Wait for automatic ext4 ROOT expansion and one reboot.
 6. Log in as `root` and set a password or SSH key before using an untrusted

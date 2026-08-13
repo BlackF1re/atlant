@@ -104,7 +104,8 @@ A required build performs the full expensive path:
 - Debian rootfs build;
 - pinned Linux build;
 - SD/NAND U-Boot and NAND payload build;
-- final unified image creation;
+- final unified raw image creation;
+- XZ compression and raw/decompressed SHA-256 equivalence check;
 - release artifact validation;
 - SD image layout validation;
 - NAND artifact validation;
@@ -113,8 +114,13 @@ A required build performs the full expensive path:
 - source-tree integrity check;
 - Sigstore/GitHub build provenance attestation.
 
+The raw `atlantian-<release>.img` remains inside the verified Actions artifact so
+layout and release-upgrade gates can operate on the exact disk image without
+using a public Release download. The user-facing asset is
+`atlantian-<release>.img.xz`.
+
 The SD upgrade integration test resolves an older published release by tag, but
-loads its image from the matching SHA-sealed GitHub Actions artifact. It never
+loads its raw image from the matching SHA-sealed GitHub Actions artifact. It never
 downloads the public Release image, so CI does not inflate user-facing download
 metrics.
 
@@ -126,7 +132,8 @@ VERIFIED-VERSION
 ```
 
 and uploads `atlantian-verified-<full-source-SHA>` as a workflow artifact with a
-90-day retention period.
+90-day retention period. That artifact contains both the raw `.img` and verified
+`.img.xz`.
 
 A failed publication therefore does not erase the successful build result. A
 later publish retry for the same SHA can download, verify and reuse the sealed
@@ -143,9 +150,16 @@ Publication is allowed only when:
 - the target release/tag does not belong to another source revision.
 
 Before upload, CI verifies the artifact's source marker, version marker,
-`SHA256SUMS`, image count and exact three-package `.deb` set. Production releases
-publish the image under the stable public name `atlantian.img` and add a tiny
-`atlantian-update.json` marker used only for anonymous aggregate update counts.
+`SHA256SUMS`, the raw/compressed image pair and the exact three-package `.deb`
+set. The raw `.img` is deliberately **not** uploaded to GitHub Releases.
+
+Release assets are uploaded in this logical order and named so GitHub's current
+natural listing preserves it:
+
+1. `atlantian-<release>.img.xz`;
+2. installed-system update payloads (`.deb` packages and NAND bundle);
+3. `atlantian-update.json` and `RELEASE-METADATA.json`;
+4. `SHA256SUMS`.
 
 Existing release history is never rewritten automatically:
 
@@ -158,14 +172,24 @@ Existing release history is never rewritten automatically:
 
 | Artifact | Purpose |
 |---|---|
-| `atlantian.img` | SD system and matching NAND installer/recovery source; stable name enables aggregate image-download metrics |
+| `atlantian-<release>.img.xz` | versioned, compressed SD system and matching NAND installer/recovery source; directly accepted by supported flashers |
 | `atlantian-nand-<release>.tar.zst` | checksummed NAND raw-boot + SquashFS payload |
 | three version-matched `.deb` files | AtlANTian platform/kernel/release updates |
-| `RELEASE-METADATA.json` | release, Debian Snapshot, source and measured storage metadata |
-| `SHA256SUMS` | public payload hashes |
 | `atlantian-update.json` | best-effort anonymous update-transaction counter marker; not trusted update payload |
+| `RELEASE-METADATA.json` | release, Debian Snapshot, source and measured raw-image storage metadata |
+| `SHA256SUMS` | public payload hashes, including both verified raw and compressed image identities |
 
 The SD filesystem is not copied wholesale into NAND.
+
+## Download-counter isolation
+
+The README image badge reads GitHub's `download_count` for the versioned `.img.xz`
+asset in the newest published release. Because image filenames carry the release
+version, this is a current-image count rather than an all-history sum.
+
+The stable `atlantian-update.json` asset provides a separate aggregate counter for
+actual updater transactions. CI never downloads either public metric asset: old
+raw images come from retained SHA-sealed Actions artifacts instead.
 
 ## Reproducible inputs and caches
 
@@ -227,13 +251,15 @@ SquashFS NAND base + raw boot bundle
         ↓
 embed exact NAND bundle in SD rootfs
         ↓
-FAT BOOT + ext4 ROOT unified image
+FAT BOOT + ext4 ROOT raw image
+        ↓
+XZ compression + round-trip verification
         ↓
 artifact/update/layout gates
         ↓
-verified SHA artifact
+verified SHA artifact (raw + XZ)
         ↓
-optional publication
+optional publication (XZ only)
 ```
 
 NAND geometry/SPL/ECC details belong to [NAND](NAND.md). Physical validation

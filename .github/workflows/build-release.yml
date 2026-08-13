@@ -190,11 +190,6 @@ jobs:
           bash scripts/test-update-leds.sh
           bash scripts/test-release-metrics.sh
 
-      - name: Select stable public image name
-        run: |
-          set -euo pipefail
-          echo "ATLANTIAN_IMAGE_NAME=atlantian" >> "$GITHUB_ENV"
-
       - name: Validate release inputs
         id: inputs
         run: bash scripts/validate-release-inputs.sh
@@ -352,6 +347,7 @@ jobs:
           overwrite: true
           path: |
             artifacts/current/*.img
+            artifacts/current/*.img.xz
             artifacts/current/*.tar.zst
             artifacts/current/*.deb
             artifacts/current/*.packages.tsv
@@ -422,10 +418,9 @@ jobs:
           set -euo pipefail
           export ATLANTIAN_SOURCE_REVISION
           ATLANTIAN_SOURCE_REVISION=$(git rev-parse --short=12 "$GITHUB_SHA")
-          export ATLANTIAN_IMAGE_NAME=atlantian
           . config/release.env
           test "$ATLANTIAN_VERSION" = "$EXPECTED_VERSION"
-          test "$ATLANTIAN_IMAGE_NAME" = atlantian
+          test "$ATLANTIAN_IMAGE_NAME" = "$ATLANTIAN_RELEASE_ID"
           {
             echo "ATLANTIAN_SOURCE_REVISION=$ATLANTIAN_SOURCE_REVISION"
             echo "ATLANTIAN_SOURCE_ID=$ATLANTIAN_SOURCE_ID"
@@ -509,9 +504,15 @@ jobs:
           test "$(cat artifacts/current/VERIFIED-VERSION)" = "$ATLANTIAN_VERSION"
           test "$RELEASE_TAG" = "v$ATLANTIAN_VERSION"
           test -s "artifacts/current/$ATLANTIAN_IMAGE_NAME.img"
+          test -s "artifacts/current/$ATLANTIAN_IMAGE_NAME.img.xz"
           test -s "artifacts/current/atlantian-nand-$ATLANTIAN_VERSION.tar.zst"
           test "$(find artifacts/current -maxdepth 1 -name '*.img' -type f | wc -l)" -eq 1
+          test "$(find artifacts/current -maxdepth 1 -name '*.img.xz' -type f | wc -l)" -eq 1
           test "$(find artifacts/current -maxdepth 1 -name '*.deb' -type f | wc -l)" -eq 3
+          xz -t "artifacts/current/$ATLANTIAN_IMAGE_NAME.img.xz"
+          raw_sha=$(sha256sum "artifacts/current/$ATLANTIAN_IMAGE_NAME.img" | awk '{print $1}')
+          decoded_sha=$(xz -dc "artifacts/current/$ATLANTIAN_IMAGE_NAME.img.xz" | sha256sum | awk '{print $1}')
+          test "$decoded_sha" = "$raw_sha"
           (cd artifacts/current && sha256sum -c SHA256SUMS)
 
       - name: Generate release notes
@@ -553,12 +554,14 @@ jobs:
         run: |
           set -euo pipefail
           release_assets=(
-            artifacts/current/*.img
-            artifacts/current/*.tar.zst
-            artifacts/current/*.deb
+            "artifacts/current/$ATLANTIAN_IMAGE_NAME.img.xz"
+            artifacts/current/atlantian-kernel_*.deb
+            "artifacts/current/atlantian-nand-$ATLANTIAN_VERSION.tar.zst"
+            artifacts/current/atlantian-platform_*.deb
+            artifacts/current/atlantian-release_*.deb
+            artifacts/current/atlantian-update.json
             artifacts/current/RELEASE-METADATA.json
             artifacts/current/SHA256SUMS
-            artifacts/current/atlantian-update.json
           )
 
           tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha 2>/dev/null) || tag_commit=""

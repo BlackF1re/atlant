@@ -10,20 +10,32 @@ DIR=${1:-$ROOT/artifacts/current}
 . "$ROOT/config/atlantian-releases.conf"
 
 IMAGE=$DIR/$ATLANTIAN_IMAGE_NAME.img
+COMPRESSED_IMAGE=$IMAGE.xz
 NAND_BUNDLE=$DIR/atlantian-nand-$ATLANTIAN_VERSION.tar.zst
 SUMS=$DIR/SHA256SUMS
 METADATA=$DIR/RELEASE-METADATA.json
 
 fail() { printf 'release artifacts: %s\n' "$*" >&2; exit 1; }
 [[ -s $IMAGE ]] || fail "missing image: $IMAGE"
+[[ -s $COMPRESSED_IMAGE ]] || fail "missing compressed image: $COMPRESSED_IMAGE"
 [[ -s $NAND_BUNDLE ]] || fail "missing NAND bundle: $NAND_BUNDLE"
 [[ -s $SUMS ]] || fail "missing checksums: $SUMS"
 [[ -s $METADATA ]] || fail "missing release metadata: $METADATA"
-[[ $(find "$DIR" -maxdepth 1 -name '*.img' -type f | wc -l) -eq 1 ]] || fail 'release must contain exactly one .img'
+[[ $(find "$DIR" -maxdepth 1 -name '*.img' -type f | wc -l) -eq 1 ]] || fail 'verified artifact must contain exactly one raw .img'
+[[ $(find "$DIR" -maxdepth 1 -name '*.img.xz' -type f | wc -l) -eq 1 ]] || fail 'verified artifact must contain exactly one compressed .img.xz'
 [[ $(find "$DIR" -maxdepth 1 -name '*.tar.zst' -type f | wc -l) -eq 1 ]] || fail 'release must contain exactly one .tar.zst'
 [[ $(find "$DIR" -maxdepth 1 -name '*.deb' -type f | wc -l) -eq 3 ]] || fail 'release must contain exactly three .deb packages'
 [[ -s ${IMAGE%.img}.packages.tsv ]] || fail 'package manifest sidecar is missing'
 [[ -s ${IMAGE%.img}.snapshot.txt ]] || fail 'snapshot sidecar is missing'
+
+for required in "$(basename "$IMAGE")" "$(basename "$COMPRESSED_IMAGE")" "$(basename "$NAND_BUNDLE")" RELEASE-METADATA.json; do
+  grep -Eq "^[0-9a-f]{64}[[:space:]]+${required//./\\.}$" "$SUMS" \
+    || fail "SHA256SUMS is missing $required"
+done
+xz -t "$COMPRESSED_IMAGE" || fail 'compressed image XZ integrity check failed'
+raw_sha=$(sha256sum "$IMAGE" | awk '{print $1}')
+decoded_sha=$(xz -dc "$COMPRESSED_IMAGE" | sha256sum | awk '{print $1}')
+[[ "$decoded_sha" = "$raw_sha" ]] || fail 'compressed image does not round-trip to the verified raw image'
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -136,4 +148,4 @@ assert nand['volumes']['overlay']['minimum_bytes'] == nand['volumes']['overlay']
 assert nand['volumes']['overlay']['minimum_bytes'] > 0
 PY
 
-echo 'release inventory, semantic/package/repository identity, measured storage metadata and volatile APT payload passed'
+echo 'release inventory, raw/XZ image equivalence, semantic/package/repository identity, measured storage metadata and volatile APT payload passed'
