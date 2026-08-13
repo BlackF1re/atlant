@@ -14,6 +14,7 @@ behavior has one primary source of truth.
 | understand Debian Snapshot automation/major transitions | [Debian lifecycle](DEBIAN-LIFECYCLE.md) |
 | understand CI, versioning, artifacts and publication | [Release pipeline](PIPELINE.md) |
 | check board support, evidence and pin mappings | [Hardware support matrix](hardware-support-matrix.md) |
+| run or record a physical board check | [Hardware validation plan](HARDWARE-VALIDATION.md) |
 | security policy | [Security](../SECURITY.md) |
 | contribution rules | [Contributing](../CONTRIBUTING.md) |
 
