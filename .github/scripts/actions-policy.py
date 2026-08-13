@@ -14,6 +14,9 @@ ALLOWED_ACTIONS = {
     "actions/cache",
     "actions/upload-artifact",
     "actions/attest-build-provenance",
+    "actions/configure-pages",
+    "actions/upload-pages-artifact",
+    "actions/deploy-pages",
 }
 
 USES_RE = re.compile(

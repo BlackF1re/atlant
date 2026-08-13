@@ -27,7 +27,7 @@ EXPECTED_PERMISSIONS = {
         "contents": "write",
         "pull-requests": "read",
     },
-    "image-download-metrics.yml": {"contents": "write"},
+    "image-download-metrics.yml": {"contents": "read", "pages": "write", "id-token": "write"},
 }
 
 
@@ -238,8 +238,11 @@ def validate_workflows() -> None:
     metric_step = step_named(metrics, "refresh", "Sum versioned image downloads")
     require_run(metric_step, 'test("^atlantian-[^/]+\\\\.img\\\\.xz$")', "image metric asset filter")
     require_run(metric_step, "gh api --paginate --slurp", "image metric complete release history")
-    update_step = step_named(metrics, "refresh", "Update metric file")
-    require_run(update_step, "git push origin HEAD:image-download-metrics", "image metric branch isolation")
+    payload_step = step_named(metrics, "refresh", "Create Pages payload")
+    require_run(payload_step, ">site/image-downloads.json", "image metric Pages payload")
+    step_named(metrics, "refresh", "Configure Pages")
+    step_named(metrics, "refresh", "Upload Pages artifact")
+    step_named(metrics, "refresh", "Deploy Pages artifact")
 
     automerge = parsed["dependabot-actions-automerge.yml"]
     workflow_run = workflow_trigger(automerge).get("workflow_run") or {}
