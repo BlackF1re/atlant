@@ -96,8 +96,6 @@ SUMS="$ARTIFACT_DIR/SHA256SUMS"
 [[ -n $KERNEL_DEB ]] || { echo 'release kernel package is missing' >&2; exit 2; }
 
 {
-  printf '# AtlANTian GNU/Linux %s\n\n' "$RELEASE"
-
   printf '## Release\n\n'
   printf '| Parameter | Value |\n|---|---|\n'
   printf '| AtlANTian | `%s` |\n' "$RELEASE"
