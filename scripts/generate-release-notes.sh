@@ -137,7 +137,7 @@ SUMS="$ARTIFACT_DIR/SHA256SUMS"
   printf '| NAND writable overlay | — | — | **>= %s** guaranteed | — |\n' \
     "$(fmt_bytes "$NAND_MIN_OVERLAY_BYTES")"
 
-  printf '\n## Public artifacts\n\n'
+  printf '\n## Artifacts\n\n'
   printf '| Artifact | Size |\n|---|---:|\n'
   artifact_row "$IMAGE"
   artifact_row "$NAND_BUNDLE"
