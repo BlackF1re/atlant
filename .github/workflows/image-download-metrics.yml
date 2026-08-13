@@ -1,4 +1,4 @@
-name: Image Download Metric
+name: Download Metrics
 
 on:
   release:
@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   refresh:
-    name: Refresh image download total
+    name: Refresh public download totals
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -28,7 +28,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Sum versioned image downloads
+      - name: Sum public download metrics
         id: metric
         env:
           GH_TOKEN: ${{ github.token }}
@@ -37,19 +37,23 @@ jobs:
           releases=$(mktemp)
           trap 'rm -f "$releases"' EXIT
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$releases"
-          downloads=$(jq '[.[][] | .assets[] | select(.name | test("^atlantian-[^/]+\\.img\\.xz$")) | .download_count] | add // 0' "$releases")
-          printf 'downloads=%s\n' "$downloads" >>"$GITHUB_OUTPUT"
+          image_downloads=$(jq '[.[][] | .assets[] | select(.name | test("^atlantian-[^/]+\\.img\\.xz$")) | .download_count] | add // 0' "$releases")
+          system_updates=$(jq '[.[][] | .assets[] | select(.name == "atlantian-update.json") | .download_count] | add // 0' "$releases")
+          printf 'image_downloads=%s\n' "$image_downloads" >>"$GITHUB_OUTPUT"
+          printf 'system_updates=%s\n' "$system_updates" >>"$GITHUB_OUTPUT"
 
       - name: Create Pages payload
         env:
-          DOWNLOADS: ${{ steps.metric.outputs.downloads }}
+          IMAGE_DOWNLOADS: ${{ steps.metric.outputs.image_downloads }}
+          SYSTEM_UPDATES: ${{ steps.metric.outputs.system_updates }}
         run: |
           set -euo pipefail
           mkdir -p site
           jq -n \
-            --argjson downloads "$DOWNLOADS" \
+            --argjson image_downloads "$IMAGE_DOWNLOADS" \
+            --argjson system_updates "$SYSTEM_UPDATES" \
             --arg updated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{schemaVersion: 1, downloads: $downloads, updatedAt: $updated_at, scope: "atlantian-<release>.img.xz assets across all GitHub Releases"}' \
+            '{schemaVersion: 1, imageDownloads: $image_downloads, systemUpdates: $system_updates, updatedAt: $updated_at, scopes: {imageDownloads: "atlantian-<release>.img.xz assets across all GitHub Releases", systemUpdates: "atlantian-update.json assets across all GitHub Releases"}}' \
             >site/image-downloads.json
 
       - name: Configure Pages

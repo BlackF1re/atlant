@@ -190,16 +190,16 @@ The SD filesystem is not copied wholesale into NAND.
 
 ## Download-counter isolation
 
-The README **Image Downloads** badge is backed by a small JSON file deployed to
-GitHub Pages. The metric workflow reads every GitHub Release, sums
-`download_count` only for names matching `atlantian-<release>.img.xz`, and deploys
-the result after publication and hourly. The counter is therefore cumulative across
-versioned images and excludes packages, checksums and metadata. Deployments create
-neither a branch nor repository commits.
+The README **Image Downloads** and **System Updates** badges are backed by one small
+JSON file deployed to GitHub Pages. The metric workflow reads every GitHub Release,
+sums `download_count` separately for names matching `atlantian-<release>.img.xz`
+and exactly `atlantian-update.json`, then deploys both results after publication and
+hourly. The counters are cumulative across release history and exclude all other
+assets. Deployments create neither a branch nor repository commits.
 
-The stable `atlantian-update.json` asset provides a separate aggregate counter for
-actual updater transactions. CI never downloads either public metric asset: old
-raw images come from retained SHA-sealed Actions artifacts instead.
+The stable `atlantian-update.json` asset is the anonymous, best-effort marker for
+actual updater transactions. CI never downloads either public metric asset: old raw
+images come from retained SHA-sealed Actions artifacts instead.
 
 ## Reproducible inputs and caches
 
