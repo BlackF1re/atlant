@@ -225,9 +225,21 @@ The SD filesystem is not copied wholesale into NAND.
 The README **Image Downloads** and **System Updates** badges are backed by one small
 JSON file deployed to GitHub Pages. The metric workflow reads every GitHub Release,
 sums `download_count` separately for names matching `atlantian-<release>.img.xz`
-and exactly `atlantian-update.json`, then deploys both results after publication and
-hourly. The counters are cumulative across release history and exclude all other
-assets. Deployments create neither a branch nor repository commits.
+and exactly `atlantian-update.json`, then deploys both cumulative totals after
+publication and hourly. Deployments create neither a branch nor repository commits.
+
+The same Pages payload also stores a **per-asset** counter for every file in every
+release. Each `(tag, asset name)` pair is mapped to a deterministic SHA-256-derived
+key so filenames containing dots, tildes or other punctuation never have to be
+embedded directly in a JSONPath expression. Release Notes use those values in the
+third **Downloads** column of the `Artifacts` table through Shields dynamic JSON
+badges. The badge therefore changes as GitHub's own `download_count` changes while
+the release description itself remains static.
+
+On the first metric refresh after this feature is introduced, the workflow
+idempotently normalizes historical `Artifacts` tables from the actual GitHub asset
+list and adds the same dynamic Downloads column. Later hourly runs do not rewrite
+already-canonical release descriptions; they only refresh the Pages JSON.
 
 The stable `atlantian-update.json` asset is the anonymous, best-effort marker for
 actual updater transactions. CI never downloads either public metric asset: old raw
