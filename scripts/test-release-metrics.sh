@@ -22,12 +22,15 @@ line_in_block() {
 }
 
 workflow=.github/workflows/build-release.yml
+metrics=.github/workflows/image-download-metrics.yml
 build=scripts/build-incremental.sh
 artifacts=scripts/test-release-artifacts.sh
 upgrade=scripts/test-release-upgrade.sh
 checker=scripts/atlantian-release-check.sh
 sd=scripts/atlantian-sysupgrade.sh
 nand=scripts/atlantian-sysupgrade-nand.sh
+notes=scripts/generate-release-notes.sh
+pipeline=docs/PIPELINE.md
 readme=README.md
 quickstart=docs/QUICKSTART.md
 installation=docs/INSTALLATION.md
@@ -104,6 +107,23 @@ require 'atlantian-<release>.img.xz' "$readme"
 require 'atlantian-<release>.img.xz' "$quickstart"
 require 'atlantian-<release>.img.xz' "$installation"
 
+# Per-asset counters are published once through Pages and then consumed by
+# dynamic badges in every Artifacts table. Historical release notes are
+# rewritten idempotently only when their table differs from the canonical form.
+require 'contents: write' "$metrics"
+require '"schemaVersion": 2' "$metrics"
+require '"assetDownloads"' "$metrics"
+require '"assetIndex"' "$metrics"
+require 'hashlib.sha256(f"{tag}\n{name}".encode()).hexdigest()' "$metrics"
+require 'Backfill artifact download columns' "$metrics"
+require 'gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id"' "$metrics"
+require '| Artifact | Size | Downloads |' "$notes"
+require '$.assetDownloads.' "$notes"
+require 'prefix": "↓ "' "$notes"
+require 'cacheSeconds": "3600"' "$notes"
+require 'per-asset' "$pipeline"
+require 'Downloads' "$pipeline"
+
 # Sanity-check the filename order we depend on for the Releases UI.
 mapfile -t names < <(printf '%s\n' \
   'atlantian-13.1.0-alpha.6.img.xz' \
@@ -118,4 +138,4 @@ mapfile -t names < <(printf '%s\n' \
 [[ ${names[5]} == atlantian-update.json ]] || fail 'update marker no longer follows update payloads'
 [[ ${names[6]} == RELEASE-METADATA.json && ${names[7]} == SHA256SUMS ]] || fail 'metadata/checksum ordering changed'
 
-echo 'versioned XZ image, release ordering, working badge URLs, anonymous updater accounting and CI-isolated counters passed'
+echo 'versioned XZ image, release ordering, per-asset download badges, anonymous updater accounting and CI-isolated counters passed'

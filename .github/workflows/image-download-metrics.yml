@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -28,33 +28,64 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Sum public download metrics
-        id: metric
+      - name: Collect public download metrics
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          releases=$(mktemp)
-          trap 'rm -f "$releases"' EXIT
+          releases="$RUNNER_TEMP/atlantian-releases.json"
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$releases"
-          image_downloads=$(jq '[.[][] | .assets[] | select(.name | test("^atlantian-[^/]+\\.img\\.xz$")) | .download_count] | add // 0' "$releases")
-          system_updates=$(jq '[.[][] | .assets[] | select(.name == "atlantian-update.json") | .download_count] | add // 0' "$releases")
-          printf 'image_downloads=%s\n' "$image_downloads" >>"$GITHUB_OUTPUT"
-          printf 'system_updates=%s\n' "$system_updates" >>"$GITHUB_OUTPUT"
-
-      - name: Create Pages payload
-        env:
-          IMAGE_DOWNLOADS: ${{ steps.metric.outputs.image_downloads }}
-          SYSTEM_UPDATES: ${{ steps.metric.outputs.system_updates }}
-        run: |
-          set -euo pipefail
           mkdir -p site
-          jq -n \
-            --argjson image_downloads "$IMAGE_DOWNLOADS" \
-            --argjson system_updates "$SYSTEM_UPDATES" \
-            --arg updated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{schemaVersion: 1, imageDownloads: $image_downloads, systemUpdates: $system_updates, updatedAt: $updated_at, scopes: {imageDownloads: "atlantian-<release>.img.xz assets across all GitHub Releases", systemUpdates: "atlantian-update.json assets across all GitHub Releases"}}' \
-            >site/image-downloads.json
+          python3 - "$releases" >site/image-downloads.json <<'PY'
+          import hashlib
+          import json
+          import sys
+          from datetime import datetime, timezone
+
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              pages = json.load(stream)
+
+          releases = [release for page in pages for release in page]
+          image_downloads = 0
+          system_updates = 0
+          asset_downloads = {}
+          asset_index = {}
+
+          for release in releases:
+              tag = release.get("tag_name") or ""
+              if not tag:
+                  continue
+              indexed_assets = {}
+              for asset in release.get("assets", []):
+                  name = asset.get("name") or ""
+                  if not name:
+                      continue
+                  downloads = int(asset.get("download_count") or 0)
+                  key = "a" + hashlib.sha256(f"{tag}\n{name}".encode()).hexdigest()
+                  asset_downloads[key] = downloads
+                  indexed_assets[name] = key
+                  if name.startswith("atlantian-") and name.endswith(".img.xz"):
+                      image_downloads += downloads
+                  if name == "atlantian-update.json":
+                      system_updates += downloads
+              asset_index[tag] = indexed_assets
+
+          payload = {
+              "schemaVersion": 2,
+              "imageDownloads": image_downloads,
+              "systemUpdates": system_updates,
+              "assetDownloads": dict(sorted(asset_downloads.items())),
+              "assetIndex": {tag: dict(sorted(assets.items())) for tag, assets in sorted(asset_index.items())},
+              "updatedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+              "scopes": {
+                  "imageDownloads": "atlantian-<release>.img.xz assets across all GitHub Releases",
+                  "systemUpdates": "atlantian-update.json assets across all GitHub Releases",
+                  "assetDownloads": "per-release GitHub asset download_count keyed by SHA-256(tag + newline + asset name)",
+              },
+          }
+          json.dump(payload, sys.stdout, indent=2, sort_keys=True)
+          sys.stdout.write("\n")
+          PY
 
       - name: Configure Pages
         # v5.0.0
@@ -70,3 +101,84 @@ jobs:
         id: deployment
         # v4.0.5
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
+
+      - name: Backfill artifact download columns
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          releases="$RUNNER_TEMP/atlantian-releases.json"
+          patches="$RUNNER_TEMP/release-note-patches"
+          owner=${GITHUB_REPOSITORY%%/*}
+          repo=${GITHUB_REPOSITORY#*/}
+          metrics_url="https://${owner,,}.github.io/${repo}/image-downloads.json"
+          rm -rf "$patches"
+          mkdir -p "$patches"
+
+          python3 - "$releases" "$patches" "$metrics_url" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import re
+          import sys
+          import urllib.parse
+
+          releases_path, patches_path, metrics_url = sys.argv[1:]
+          patches = pathlib.Path(patches_path)
+          with open(releases_path, encoding="utf-8") as stream:
+              pages = json.load(stream)
+          releases = [release for page in pages for release in page]
+
+          def fmt_bytes(value):
+              value = int(value)
+              units = ("B", "KiB", "MiB", "GiB", "TiB")
+              amount = float(value)
+              for unit in units:
+                  if amount < 1024 or unit == units[-1]:
+                      return f"{amount:.2f}{unit}" if unit != "B" else f"{value}B"
+                  amount /= 1024
+              raise AssertionError("unreachable")
+
+          def badge(tag, name):
+              key = "a" + hashlib.sha256(f"{tag}\n{name}".encode()).hexdigest()
+              params = urllib.parse.urlencode({
+                  "url": metrics_url,
+                  "query": f"$.assetDownloads.{key}",
+                  "label": "",
+                  "prefix": "↓ ",
+                  "cacheSeconds": "3600",
+              })
+              return f"![downloads](https://img.shields.io/badge/dynamic/json?{params})"
+
+          section_re = re.compile(r"(?ms)^## Artifacts\n\n.*?(?=^## |\Z)")
+          for release in releases:
+              body = release.get("body") or ""
+              tag = release.get("tag_name") or ""
+              assets = release.get("assets") or []
+              if not tag or not assets or not section_re.search(body):
+                  continue
+              rows = [
+                  "## Artifacts",
+                  "",
+                  "| Artifact | Size | Downloads |",
+                  "|---|---:|---:|",
+              ]
+              for asset in assets:
+                  name = asset.get("name") or ""
+                  if not name:
+                      continue
+                  rows.append(f"| `{name}` | {fmt_bytes(asset.get('size') or 0)} | {badge(tag, name)} |")
+              replacement = "\n".join(rows) + "\n\n"
+              updated = section_re.sub(lambda _: replacement, body, count=1)
+              if updated == body:
+                  continue
+              with open(patches / f"{release['id']}.json", "w", encoding="utf-8") as stream:
+                  json.dump({"body": updated}, stream, ensure_ascii=False)
+          PY
+
+          shopt -s nullglob
+          for patch in "$patches"/*.json; do
+            release_id=$(basename "$patch" .json)
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" --input "$patch" >/dev/null
+            echo "Updated artifact download column for release $release_id"
+          done
