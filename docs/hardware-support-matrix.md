@@ -22,7 +22,7 @@ validation status. Detailed NAND internals live in [NAND](NAND.md).
 | microSD root | Ready | FAT BOOT + ext4 ROOT, first-boot expansion |
 | 256 MiB Micron NAND visibility | Ready | PL35X MTD; raw+OOB backup path |
 | AtlANTian NAND install/boot, 512 MiB board | **Ready** | destructive install and cold BootROM→SPL→U-Boot→Linux→OverlayFS→multi-user boot validated |
-| AtlANTian NAND install/boot, 1 GiB board | **Validation** | shared software path; dedicated cold NAND boot still required |
+| AtlANTian NAND install/boot, 1 GiB board | **Ready** | destructive install, cold NAND boot, warm reboot and OverlayFS validated |
 | real NAND bad-block case | **Validation** | software is bad-block aware; physical bad-block placement still untested |
 | adopted-SD extroot/fallback | **Validation** | implemented; paired-card activation/no-card fallback still needs bench proof |
 | interrupted recovery / factory restore | **Validation** | implemented safety/recovery paths still need controlled destructive tests |
@@ -72,7 +72,7 @@ No Linux command or U-Boot environment substitutes for moving the jumper.
 Observed stock NAND is Micron `MT29F2G08ABAEAWP`, 256 MiB, with 2048-byte pages,
 64-byte OOB, 128 KiB eraseblocks and Micron on-die BCH 4/512 ECC.
 
-The validated 512 MiB-board NAND path includes:
+The validated NAND path on both 512 MiB and 1 GiB boards includes:
 
 - raw+OOB pre-install backup;
 - raw boot programming and final compare from SD U-Boot;

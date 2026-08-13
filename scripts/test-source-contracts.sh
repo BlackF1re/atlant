@@ -219,6 +219,9 @@ require_text 'release parameter section' '## Release' scripts/generate-release-n
 require_text 'release storage metrics' '## Storage metrics' scripts/generate-release-notes.sh
 require_text 'release artifact section' '## Artifacts' scripts/generate-release-notes.sh
 require_text 'release changelog section' '## Changes' scripts/generate-release-notes.sh
+require_text 'release batch policy' 'release_input_commits >= 5' .github/workflows/build-release.yml
+require_text 'release batch counter' 'release-batch-state.sh' .github/workflows/build-release.yml
+require_text 'presentation-only release notes excluded from builds' '!scripts/generate-release-notes.sh' .github/workflows/build-release.yml scripts/release-batch-state.sh
 
 # Repository hygiene.
 reject_text 'architecture leaked into release/image identity' 'armhf' \

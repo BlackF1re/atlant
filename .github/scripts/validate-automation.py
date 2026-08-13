@@ -137,6 +137,18 @@ def validate_workflows() -> None:
     if publish.get("type") != "boolean" or publish.get("default") is not False:
         fail("build-release.yml: manual publish must be explicit and default to false")
 
+    push_paths = ((workflow_trigger(build) or {}).get("push") or {}).get("paths") or []
+    if "scripts/**" not in push_paths or "!scripts/generate-release-notes.sh" not in push_paths:
+        fail("build-release.yml: presentation-only release notes must not trigger image builds")
+
+    plan = step_named(build, "plan", "Find reusable verified build")
+    plan_run = str(plan.get("run", ""))
+    require_run(plan, "scripts/release-batch-state.sh", "release batch policy")
+    require_run(plan, "release_input_commits >= 5", "release batch threshold")
+    batch_state = (ROOT / "scripts" / "release-batch-state.sh").read_text(encoding="utf-8")
+    if "scripts/generate-release-notes.sh" not in batch_state:
+        fail("release batch state must exclude presentation-only release notes")
+
     ordered_release_steps = [
         "Validate source contracts",
         "Validate release inputs",

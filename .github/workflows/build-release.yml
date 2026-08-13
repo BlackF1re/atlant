@@ -16,14 +16,15 @@ on:
   push:
     branches: [main]
     paths:
-      # Workflow-only maintenance is intentionally excluded: changing this file
-      # must not spend a full release build. Source/build inputs still trigger it.
+      # Only release-input changes enter the release planner. The planner batches
+      # them, so a qualifying push does not necessarily start a full image build.
       - 'board/**'
       - 'config/**'
       - 'debian-*.sha256'
       - 'fpga/**'
       - 'kernel-overlay/**'
       - 'scripts/**'
+      - '!scripts/generate-release-notes.sh'
       - 'systemd/**'
 
 permissions:
@@ -73,17 +74,31 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          PUBLISH_REQUESTED: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.publish || inputs.origin == 'debian-watch')) }}
+          AUTOMATIC_PUSH: ${{ github.event_name == 'push' }}
+          MANUAL_PUBLICATION: ${{ github.event_name == 'workflow_dispatch' && (inputs.publish || inputs.origin == 'debian-watch') }}
         run: |
           set -euo pipefail
           . config/release.env
 
           artifact_name="atlantian-verified-${GITHUB_SHA}"
           build_required=true
+          publish_requested=false
           already_published=false
           reuse_run_id=""
 
-          if [[ "$PUBLISH_REQUESTED" == true ]]; then
+          if [[ "$MANUAL_PUBLICATION" == true ]]; then
+            publish_requested=true
+          elif [[ "$AUTOMATIC_PUSH" == true ]]; then
+            release_input_commits=$(bash scripts/release-batch-state.sh "$GITHUB_SHA")
+            if (( release_input_commits >= 5 )); then
+              publish_requested=true
+            else
+              build_required=false
+              echo "Deferring release build: ${release_input_commits}/5 release-input commits since the last release."
+            fi
+          fi
+
+          if [[ "$publish_requested" == true ]]; then
             release_tag="v$ATLANTIAN_VERSION"
             tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$release_tag" --jq .sha 2>/dev/null) || tag_commit=""
 
@@ -109,7 +124,7 @@ jobs:
           fi
 
           {
-            echo "publish_requested=$PUBLISH_REQUESTED"
+            echo "publish_requested=$publish_requested"
             echo "build_required=$build_required"
             echo "already_published=$already_published"
             echo "reuse_run_id=$reuse_run_id"
@@ -122,7 +137,8 @@ jobs:
             echo '| Item | Value |'
             echo '|---|---|'
             echo "| Version | $ATLANTIAN_VERSION |"
-            echo "| Publish requested | $PUBLISH_REQUESTED |"
+            echo "| Release-input commits since last release | ${release_input_commits:-manual} |"
+            echo "| Publish requested | $publish_requested |"
             echo "| Build required | $build_required |"
             echo "| Already published | $already_published |"
             echo "| Reusable workflow run | ${reuse_run_id:-none} |"
