@@ -127,11 +127,11 @@ internal upper.
 ## Download metrics
 
 Every release publishes a versioned user image such as
-`atlantian-13.1.0-alpha.6.img.xz`. The **Release Downloads** badge uses GitHub's
-cumulative repository-release counter, so it keeps its history when a new version
-is published. It includes all public release assets (images, packages, checksums
-and metadata), not only the differently named historical image files. GitHub does
-not expose a public all-history aggregate for those versioned image assets alone.
+`atlantian-13.1.0-alpha.6.img.xz`. The **Image Downloads** badge sums GitHub's
+`download_count` only for assets matching `atlantian-<release>.img.xz` across all
+releases. It refreshes after release publication and hourly, so a new image begins
+at zero without discarding downloads of earlier versioned images. Packages,
+checksums and metadata are excluded.
 
 Every release also publishes the tiny stable `atlantian-update.json` marker.
 `atlantian-sysupgrade --check` and `--notes` do **not** download it. After the user

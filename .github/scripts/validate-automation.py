@@ -16,6 +16,7 @@ EXPECTED_WORKFLOWS = {
     "build-release.yml": "Build & Release",
     "debian-watch.yml": "Debian Base Watch",
     "dependabot-actions-automerge.yml": "Dependabot Auto-merge",
+    "image-download-metrics.yml": "Image Download Metric",
 }
 EXPECTED_PERMISSIONS = {
     "ci.yml": {"contents": "read"},
@@ -26,6 +27,7 @@ EXPECTED_PERMISSIONS = {
         "contents": "write",
         "pull-requests": "read",
     },
+    "image-download-metrics.yml": {"contents": "write"},
 }
 
 
@@ -225,6 +227,19 @@ def validate_workflows() -> None:
     if any(token in snapshot_run for token in forbidden_release_mutations):
         fail("Debian snapshot refresh must not mutate or stage the AtlANTian release version")
     step_named(watcher, "refresh", "Report Debian major availability")
+
+    metrics = parsed["image-download-metrics.yml"]
+    metric_schedule = workflow_trigger(metrics).get("schedule") or []
+    if metric_schedule != [{"cron": "17 * * * *"}]:
+        fail("image download metric must refresh hourly at minute 17")
+    release = workflow_trigger(metrics).get("release") or {}
+    if release.get("types") != ["published"]:
+        fail("image download metric must refresh after release publication")
+    metric_step = step_named(metrics, "refresh", "Sum versioned image downloads")
+    require_run(metric_step, 'test("^atlantian-[^/]+\\\\.img\\\\.xz$")', "image metric asset filter")
+    require_run(metric_step, "gh api --paginate --slurp", "image metric complete release history")
+    update_step = step_named(metrics, "refresh", "Update metric file")
+    require_run(update_step, "git push origin HEAD:image-download-metrics", "image metric branch isolation")
 
     automerge = parsed["dependabot-actions-automerge.yml"]
     workflow_run = workflow_trigger(automerge).get("workflow_run") or {}

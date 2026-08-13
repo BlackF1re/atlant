@@ -1,0 +1,58 @@
+name: Image Download Metric
+
+on:
+  release:
+    types: [published]
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atlantian-image-download-metric
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Refresh image download total
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout metric branch
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: image-download-metrics
+          fetch-depth: 1
+
+      - name: Sum versioned image downloads
+        id: metric
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          releases=$(mktemp)
+          trap 'rm -f "$releases"' EXIT
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$releases"
+          downloads=$(jq '[.[][] | .assets[] | select(.name | test("^atlantian-[^/]+\\.img\\.xz$")) | .download_count] | add // 0' "$releases")
+          printf 'downloads=%s\n' "$downloads" >>"$GITHUB_OUTPUT"
+
+      - name: Update metric file
+        env:
+          DOWNLOADS: ${{ steps.metric.outputs.downloads }}
+        run: |
+          set -euo pipefail
+          existing=$(jq -r '.downloads' image-downloads.json)
+          [[ "$existing" = "$DOWNLOADS" ]] && exit 0
+          jq -n \
+            --argjson downloads "$DOWNLOADS" \
+            --arg updated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{schemaVersion: 1, downloads: $downloads, updatedAt: $updated_at, scope: "atlantian-<release>.img.xz assets across all GitHub Releases"}' \
+            >image-downloads.json
+          git config user.name 'Павел Левицкий'
+          git config user.email 'plevickij57@gmail.com'
+          git add image-downloads.json
+          git commit -m 'chore: refresh image download metric'
+          git push origin HEAD:image-download-metrics
