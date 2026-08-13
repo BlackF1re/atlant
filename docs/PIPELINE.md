@@ -10,7 +10,8 @@ documented in [Debian lifecycle](DEBIAN-LIFECYCLE.md).
 
 | Trigger | Build | Publish |
 |---|---|---|
-| push to `main` touching a source/build-input path | after 5 qualifying commits | yes, automatically |
+| first qualifying push in a repository with no AtlANTian release tag | yes | yes, automatically |
+| later push to `main` touching a source/build-input path | after 5 qualifying commits | yes, automatically |
 | Debian Watch dispatch (`origin=debian-watch`) | yes | yes, automatically |
 | manual `workflow_dispatch`, `publish=false` | yes | no |
 | manual `workflow_dispatch`, `publish=true` | yes or reuse | yes |
@@ -28,14 +29,18 @@ systemd/**
 ```
 
 Documentation and workflow-only maintenance are intentionally excluded from the
-full release-build path.
+full release-build path. `scripts/generate-release-notes.sh` is explicitly
+excluded because it changes publication presentation rather than image contents.
 
-Automatic publication batches five qualifying commits since the last release.
-This prevents documentation, release-presentation and small incremental source
-changes from each producing a new large image. A manual dispatch with
-`publish=true`, and the Debian Watch path, bypass this batch threshold when an
-immediate verified release is needed. `scripts/generate-release-notes.sh` is
-explicitly excluded because it changes presentation only, not the image.
+After the first published release, automatic source publication batches five
+qualifying commits since the last version tag. This prevents small incremental
+changes from each producing a new large image. With no AtlANTian release tag,
+`release-batch-state.sh` deliberately reports the threshold as ready so a freshly
+imported repository publishes its first verified release immediately instead of
+waiting for four unrelated follow-up edits.
+
+A manual dispatch with `publish=true`, and the Debian Watch path, bypass this batch
+threshold when an immediate verified release is needed.
 
 A newer run on the same ref cancels an older in-progress release run. Publication
 also requires the built SHA to still be the current `main` tip.
@@ -51,7 +56,7 @@ The configured release line is:
 Examples:
 
 ```text
-13.1.0-alpha.3
+13.1.0-alpha.8
 13.1.0-beta.1
 13.1.0-rc.1
 13.1.0
@@ -62,7 +67,7 @@ Examples:
 and prerelease channel. `scripts/resolve-release-version.sh` resolves the
 publishable version from existing repository tags:
 
-- a prerelease channel increments its numeric sequence (`alpha.3 → alpha.4`);
+- a prerelease channel increments its numeric sequence (`alpha.8 → alpha.9`);
 - changing channel starts from that channel's configured sequence
   (`alpha.N → beta.1`);
 - a stable line increments the patch when that stable version already exists;
@@ -70,8 +75,8 @@ publishable version from existing repository tags:
   version instead of inventing another one.
 
 Source revision and Debian Snapshot timestamp are metadata, not release-ordering
-components. Debian packages use native prerelease ordering, e.g.
-`13.1.0~alpha.3-1`.
+components. Debian package metadata uses native prerelease ordering, e.g.
+`13.1.0~alpha.8-1`.
 
 A Debian-major transition remains explicit because it changes the release line
 itself.
@@ -90,6 +95,10 @@ seal SHA-specific verified artifact
 publish (only when requested and eligible)
 ```
 
+A successful plan-only run is an orchestration result, not a claim that the
+current `main` SHA has a binary image. Published releases are the source revisions
+that completed the full binary build and verification path.
+
 ### Plan
 
 The plan job resolves the version and decides whether a build is necessary.
@@ -106,7 +115,7 @@ idempotent no-op. If a verified artifact exists, publication can reuse it.
 
 A required build performs the full expensive path:
 
-- source/build contract checks;
+- source/build contract checks, including release-client/public-filename tests;
 - frozen release-input validation;
 - Debian rootfs build;
 - pinned Linux build;
@@ -140,7 +149,7 @@ VERIFIED-VERSION
 
 and uploads `atlantian-verified-<full-source-SHA>` as a workflow artifact with a
 90-day retention period. That artifact contains both the raw `.img` and verified
-`.img.xz`.
+`.img.xz`, canonical Debian `.deb` filenames and its internal checksum manifest.
 
 A failed publication therefore does not erase the successful build result. A
 later publish retry for the same SHA can download, verify and reuse the sealed
@@ -156,17 +165,40 @@ Publication is allowed only when:
 - the workflow source SHA is still current `main`;
 - the target release/tag does not belong to another source revision.
 
-Before upload, CI verifies the artifact's source marker, version marker,
-`SHA256SUMS`, the raw/compressed image pair and the exact three-package `.deb`
-set. The raw `.img` is deliberately **not** uploaded to GitHub Releases.
+Before any publication transformation, CI re-verifies the sealed artifact's
+source marker, version marker, internal `SHA256SUMS`, raw/compressed image pair and
+exact three-package `.deb` set.
 
-Release assets are uploaded in this logical order and named so GitHub's current
-natural listing preserves it:
+`generate-release-notes.sh` then invokes `prepare-public-release.sh` on the local
+publication copy. That step:
+
+1. proves the compressed image still decodes to the sealed raw image;
+2. keeps Debian package `Version` metadata unchanged;
+3. normalizes only public prerelease `.deb` filenames from `~` to `.`;
+4. creates the deterministic `atlantian-update.json` marker;
+5. rewrites the **public** `SHA256SUMS` to cover exactly the downloadable payload
+   names, not the private raw image;
+6. generates Release Notes from those exact public filenames.
+
+The raw `.img` remains in the local/Actions artifact but is deliberately **not**
+uploaded to GitHub Releases.
+
+Release assets are uploaded in this logical order:
 
 1. `atlantian-<release>.img.xz`;
 2. installed-system update payloads (`.deb` packages and NAND bundle);
 3. `atlantian-update.json` and `RELEASE-METADATA.json`;
-4. `SHA256SUMS`.
+4. public `SHA256SUMS`.
+
+For a prerelease, the distinction is intentional:
+
+```text
+Debian package Version:  13.1.0~alpha.8-1
+public asset filename:    atlantian-kernel_13.1.0.alpha.8-1_<arch>.deb
+```
+
+The updater validates internal Package/Version/Architecture fields and SHA-256,
+so the filename is not treated as package identity.
 
 Existing release history is never rewritten automatically:
 
@@ -181,10 +213,10 @@ Existing release history is never rewritten automatically:
 |---|---|
 | `atlantian-<release>.img.xz` | versioned, compressed SD system and matching NAND installer/recovery source; directly accepted by supported flashers |
 | `atlantian-nand-<release>.tar.zst` | checksummed NAND raw-boot + SquashFS payload |
-| three version-matched `.deb` files | AtlANTian platform/kernel/release updates |
-| `atlantian-update.json` | best-effort anonymous update-transaction counter marker; not trusted update payload |
+| three version-matched `.deb` files | AtlANTian platform/kernel/release updates; public filename is GitHub-safe while internal Debian Version stays canonical |
+| `atlantian-update.json` | best-effort anonymous update-transaction counter marker; not trusted package identity |
 | `RELEASE-METADATA.json` | release, Debian Snapshot, source and measured raw-image storage metadata |
-| `SHA256SUMS` | public payload hashes, including both verified raw and compressed image identities |
+| `SHA256SUMS` | hashes for exactly the public downloadable payload names |
 
 The SD filesystem is not copied wholesale into NAND.
 
@@ -234,13 +266,16 @@ Expected sequence:
 ```text
 source tree
   ↓
-push to new repository main
+first qualifying push to new repository main
+  ↓
+batch planner treats no-release state as bootstrap-ready
   ↓
 automatic build + verification + publication
   ↓
 v<resolved-version> release
 ```
 
+Only subsequent source changes use the normal five-qualifying-commit batch.
 The release workflow uses scoped `GITHUB_TOKEN` permissions; no repository secret
 is required for normal GitHub publication.
 
@@ -267,7 +302,9 @@ XZ compression + round-trip verification
         ↓
 artifact/update/layout gates
         ↓
-verified SHA artifact (raw + XZ)
+verified SHA artifact (raw + XZ, canonical package names)
+        ↓
+public filename/checksum normalization
         ↓
 optional publication (XZ only)
 ```

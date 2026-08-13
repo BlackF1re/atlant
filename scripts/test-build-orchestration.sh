@@ -26,6 +26,15 @@ validate_package_profile() {
 validate_package_profile config/packages.base
 validate_package_profile config/packages.nand
 
+# Release discovery and public publication filenames are cheap, critical
+# contracts. Exercise them before any rootfs/kernel work.
+bash scripts/test-release-client.sh
+bash scripts/test-public-release-assets.sh
+bash scripts/test-release-batch.sh
+require 'bash "$ROOT/scripts/prepare-public-release.sh" "$ARTIFACT_DIR"' scripts/generate-release-notes.sh
+require 'BATCH_THRESHOLD=5' scripts/release-batch-state.sh
+require 'count=$BATCH_THRESHOLD' scripts/release-batch-state.sh
+
 # NAND derives from the exact common factory rootfs and adds only its explicit
 # early-boot package delta. A normal full build must never run debootstrap twice.
 require 'ARCH=armhf' scripts/build-rootfs.sh
@@ -145,4 +154,4 @@ require 'unified image does not contain the NAND payload' scripts/test-nand-arti
 # the same cheap preflight that protects the expensive build.
 bash scripts/test-repository-portability.sh
 
-echo 'build orchestration, clean NAND rebase + integration, exact build caches, unified image, boot-length and repository-portability contracts passed'
+echo 'build orchestration, release-client/publication, clean NAND rebase + integration, exact build caches, unified image, boot-length and repository-portability contracts passed'

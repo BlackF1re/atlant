@@ -1,6 +1,6 @@
 # AtlANTian GNU/Linux
 
-[![Latest Release](https://img.shields.io/github/v/release/BlackF1re/atlantian?include_prereleases&sort=semver&label=release)](https://github.com/BlackF1re/atlantian/releases) [![Build](https://github.com/BlackF1re/atlantian/actions/workflows/build-release.yml/badge.svg?branch=main)](https://github.com/BlackF1re/atlantian/actions/workflows/build-release.yml) [![Release Date](https://img.shields.io/github/release-date-pre/BlackF1re/atlantian?display_date=published_at&label=released)](https://github.com/BlackF1re/atlantian/releases) [![Debian Snapshot](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2FBlackF1re%2Fatlantian%2Frefs%2Fheads%2Fmain%2Fconfig%2Fdebian-snapshot.env&search=DEBIAN_SNAPSHOT_TIMESTAMP%3D(%5Cd%7B4%7D)(%5Cd%7B2%7D)(%5Cd%7B2%7D)T%5Cd%7B6%7DZ&replace=%241-%242-%243&label=Debian%20snapshot)](https://github.com/BlackF1re/atlantian/blob/main/config/debian-snapshot.env) [![Image Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fblackf1re.github.io%2Fatlantian%2Fimage-downloads.json&query=%24.imageDownloads&label=image%20downloads&cacheSeconds=3600)](https://github.com/BlackF1re/atlantian/releases) [![System Updates](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fblackf1re.github.io%2Fatlantian%2Fimage-downloads.json&query=%24.systemUpdates&label=system%20updates&cacheSeconds=3600)](docs/UPGRADING.md)
+[![Latest Release](https://img.shields.io/github/v/release/BlackF1re/atlantian?include_prereleases&sort=semver&label=release)](https://github.com/BlackF1re/atlantian/releases) [![Release Pipeline](https://img.shields.io/github/actions/workflow/status/BlackF1re/atlantian/build-release.yml?branch=main&label=release%20pipeline)](https://github.com/BlackF1re/atlantian/actions/workflows/build-release.yml) [![Release Date](https://img.shields.io/github/release-date-pre/BlackF1re/atlantian?display_date=published_at&label=released)](https://github.com/BlackF1re/atlantian/releases) [![Debian Snapshot](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2FBlackF1re%2Fatlantian%2Frefs%2Fheads%2Fmain%2Fconfig%2Fdebian-snapshot.env&search=DEBIAN_SNAPSHOT_TIMESTAMP%3D(%5Cd%7B4%7D)(%5Cd%7B2%7D)(%5Cd%7B2%7D)T%5Cd%7B6%7DZ&replace=%241-%242-%243&label=Debian%20snapshot)](https://github.com/BlackF1re/atlantian/blob/main/config/debian-snapshot.env) [![Image Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fblackf1re.github.io%2Fatlantian%2Fimage-downloads.json&query=%24.imageDownloads&label=image%20downloads&cacheSeconds=3600)](https://github.com/BlackF1re/atlantian/releases) [![System Updates](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fblackf1re.github.io%2Fatlantian%2Fimage-downloads.json&query=%24.systemUpdates&label=system%20updates&cacheSeconds=3600)](docs/UPGRADING.md)
 
 **AtlANTian** is a compact Debian-based GNU/Linux distribution for the Bitmain
 Antminer S9 control board. It turns the Xilinx Zynq-7010 into a general-purpose
@@ -59,7 +59,7 @@ The initial root password is empty for first provisioning. See
 | microSD boot | Ready; cold boot and reboot validated on both RAM variants |
 | Gigabit Ethernet | Ready; DHCP |
 | UART | Ready; `ttyPS0`, `115200 8N1` |
-| 256 MiB Micron NAND | Ready; install and boot validated on 512 MiB and 1 GiB boards |
+| 256 MiB Micron NAND | Ready; install, cold boot and reboot validated on 512 MiB and 1 GiB boards |
 | FPGA | FPGA Manager/Region, configfs overlays and optional profiles |
 | LEDs, buttons, XADC, watchdog | Ready |
 | PS USB0 | Disabled because of a known MIO routing collision |
@@ -113,8 +113,14 @@ atlantian-sysupgrade
 | Operation | SD | NAND |
 |---|---|---|
 | Debian packages | normal APT | normal APT into the active upper |
-| AtlANTian base/kernel/boot | in-place `atlantian-sysupgrade` | stage verified NAND bundle on the paired recovery SD, then continue maintenance from SD |
+| AtlANTian base/kernel/boot | verified in-place package update | stage verified NAND bundle on the paired recovery SD, then continue maintenance from SD |
 | Debian-major transition | explicit AtlANTian release-line transition | clean NAND reinstall |
+
+Debian prerelease ordering is retained **inside** package metadata (for example
+`13.1.0~alpha.8-1`). Public GitHub asset filenames use `.` in place of `~`
+(for example `atlantian-kernel_13.1.0.alpha.8-1_<arch>.deb`). The updater verifies
+the downloaded package's Package/Version/Architecture fields and public checksum;
+it does not infer package identity from the filename alone.
 
 **Image Downloads** is the cumulative sum of GitHub `download_count` values for
 only `atlantian-<release>.img.xz` assets across all releases. It is refreshed after
@@ -148,7 +154,7 @@ the [hardware matrix](docs/hardware-support-matrix.md).
 AtlANTian versions include the Debian major generation:
 
 ```text
-13.1.0-alpha.3
+13.1.0-alpha.8
 │  │ │    └─ prerelease channel and sequence
 │  │ └────── AtlANTian patch
 │  └──────── AtlANTian release line
@@ -159,14 +165,21 @@ Typical progression is `13.1.0-alpha.N` → `13.1.0-beta.N` →
 `13.1.0-rc.N` → `13.1.0` → `13.1.1` → `13.2.0`. A Debian 14 line uses
 `14.x.y`.
 
-CI resolves the next publishable version from repository tags. A meaningful
-source/build-input push to `main`, or a validated Debian Snapshot refresh,
-builds, verifies and publishes the next version automatically. Documentation and
-workflow-only maintenance are outside the release-build path. Debian-major
+CI resolves the next publishable version from repository tags. The first
+qualifying push in a fresh repository bootstraps a verified release immediately.
+After that, normal source/build-input pushes are batched: the fifth qualifying
+commit since the previous release triggers the full build, verification and
+publication. A validated Debian Snapshot refresh and an explicit manual publish
+bypass the batch threshold. Documentation, workflow-only maintenance and release-
+presentation-only changes are outside the release-build path. Debian-major
 transitions remain explicit decisions.
 
+The **Release Pipeline** badge reports the outcome of that orchestration workflow;
+a green plan-only run does not claim that every current `main` SHA has a binary
+image. Published releases are the fully built and verified binary states.
+
 Prereleases use Debian-native package ordering, for example
-`13.1.0~alpha.3-1`. Every release records its exact Debian Snapshot, source
+`13.1.0~alpha.8-1`. Every release records its exact Debian Snapshot, source
 revision and publishing repository.
 
 ## Build from source
@@ -183,7 +196,9 @@ The production workflow pins Debian, Linux and U-Boot inputs and validates image
 compression, NAND, update and source-integrity contracts. A successful build is
 sealed as a SHA-specific verified workflow artifact before publication; a later
 publication retry for the same SHA can reuse that artifact instead of rebuilding
-it.
+it. The sealed artifact keeps the raw `.img` and canonical Debian filenames for
+CI; publication normalizes only the public filenames and writes a public
+`SHA256SUMS` covering exactly the downloadable payloads.
 
 See [Pipeline](docs/PIPELINE.md) for the CI/release contract.
 
