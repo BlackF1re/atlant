@@ -42,6 +42,15 @@ waiting for four unrelated follow-up edits.
 A manual dispatch with `publish=true`, and the Debian Watch path, bypass this batch
 threshold when an immediate verified release is needed.
 
+Debian Watch does **not** bypass protected `main`. A changed Snapshot is committed
+on a short-lived `maintenance/debian-snapshot-*` branch, proposed through a pull
+request, explicitly validated by the same `CI / Validate` job on its exact
+base/head SHAs, and squash-merged through GitHub's protected-branch API only if
+validation succeeds and `main` has not moved. The watcher then dispatches
+`Build & Release` against the resulting exact `main` SHA with
+`origin=debian-watch`. Its inactivity heartbeat uses the same protected merge path
+but never dispatches a release build.
+
 A newer run on the same ref cancels an older in-progress release run. Publication
 also requires the built SHA to still be the current `main` tip.
 
