@@ -109,6 +109,37 @@ current_merge=$(jq -r '.merge_commit_sha // empty' <<<"$meta")
 [[ $current_head == "$HEAD_SHA" ]] || fail "maintenance PR head moved after validation: expected $HEAD_SHA, got $current_head"
 [[ $current_merge == "$MERGE_SHA" ]] || fail "merge candidate changed after validation: expected $MERGE_SHA, got $current_merge"
 
+# Pull requests created with GITHUB_TOKEN do not recursively emit a normal
+# pull_request workflow check. Publish a commit-status bridge only after the
+# real merge-candidate CI has succeeded. Required-status protection accepts
+# commit statuses as well as checks; the status therefore records, rather than
+# bypasses, the exact validation result above.
+validation_url="https://github.com/$REPO/actions/runs/$run_id"
+for sha in "$HEAD_SHA" "$MERGE_SHA"; do
+  gh api --method POST "repos/$REPO/statuses/$sha" \
+    -f state=success \
+    -f context=Validate \
+    -f description='Validated by CI on the exact GitHub merge candidate' \
+    -f target_url="$validation_url" >/dev/null
+done
+
+# Give branch-protection state a short bounded window to observe the successful
+# status before the merge API is called.
+for _ in $(seq 1 15); do
+  state=$(gh api "repos/$REPO/pulls/$pr" --jq '.mergeable_state // empty')
+  [[ $state == clean ]] && break
+  [[ $state != dirty ]] || fail 'maintenance PR became conflicted after validation'
+  sleep 1
+done
+
+current_main=$(gh api "repos/$REPO/commits/main" --jq .sha)
+[[ $current_main == "$BASE_SHA" ]] || fail "main moved before protected merge: expected $BASE_SHA, got $current_main"
+meta=$(gh api "repos/$REPO/pulls/$pr")
+current_head=$(jq -r '.head.sha // empty' <<<"$meta")
+current_merge=$(jq -r '.merge_commit_sha // empty' <<<"$meta")
+[[ $current_head == "$HEAD_SHA" ]] || fail "maintenance PR head moved before protected merge: expected $HEAD_SHA, got $current_head"
+[[ $current_merge == "$MERGE_SHA" ]] || fail "merge candidate changed before protected merge: expected $MERGE_SHA, got $current_merge"
+
 merge_json=$(mktemp)
 trap 'rm -f "$merge_json"; cleanup' EXIT
 if ! gh api --method PUT "repos/$REPO/pulls/$pr/merge" \
