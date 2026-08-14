@@ -111,6 +111,12 @@ require 'atlantian-<release>.img.xz' "$installation"
 # dynamic badges in every Artifacts table. Historical release notes are
 # rewritten idempotently only when their table differs from the canonical form.
 require 'contents: write' "$metrics"
+require 'workflow_run:' "$metrics"
+require 'workflows: [Build & Release]' "$metrics"
+require 'types: [completed]' "$metrics"
+require 'Decide metrics refresh' "$metrics"
+require 'select(.target_commitish == \"$WORKFLOW_HEAD_SHA\")' "$metrics"
+require 'needs.gate.outputs.refresh == '"'"'true'"'"'' "$metrics"
 require '"schemaVersion": 2' "$metrics"
 require '"assetDownloads"' "$metrics"
 require '"assetIndex"' "$metrics"
@@ -138,4 +144,4 @@ mapfile -t names < <(printf '%s\n' \
 [[ ${names[5]} == atlantian-update.json ]] || fail 'update marker no longer follows update payloads'
 [[ ${names[6]} == RELEASE-METADATA.json && ${names[7]} == SHA256SUMS ]] || fail 'metadata/checksum ordering changed'
 
-echo 'versioned XZ image, release ordering, per-asset download badges, anonymous updater accounting and CI-isolated counters passed'
+echo 'versioned XZ image, release ordering, immediate post-release refresh, per-asset download badges, anonymous updater accounting and CI-isolated counters passed'
