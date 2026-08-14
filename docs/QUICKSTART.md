@@ -37,20 +37,21 @@ system as `ATLANTIAN_RELEASE_REPOSITORY`.
 
 ## 3. Write the image
 
-**Windows / graphical tools:** Rufus, Raspberry Pi Imager and Etcher can open the
-versioned `.img.xz` directly; select the whole microSD device and write in raw/DD
-mode where the tool asks.
+Use a raw-image writer such as Rufus, Raspberry Pi Imager or Etcher. If the
+installed version accepts `.img.xz`, select the compressed release asset directly.
+If it does not, decompress the file first and write the resulting `.img` as a raw
+disk image.
 
-**Linux:** stream the XZ image directly into the whole card device:
+On Linux, no intermediate `.img` file is required:
 
 ```sh
 xz -dc atlantian-*.img.xz | sudo dd of=/dev/sdX bs=8M status=progress conv=fsync
 sync
 ```
 
-Use the whole card device, not a partition. The release also keeps the exact raw
-`.img` inside its verified CI artifact for regression testing, but only the
-smaller `.img.xz` is published for normal users.
+Use the whole card device, not a partition. The release keeps the exact raw `.img`
+inside its verified CI artifact for regression testing, but only `.img.xz` is
+published as the normal user download.
 
 ## 4. First boot
 
@@ -122,6 +123,7 @@ See [Upgrading](UPGRADING.md) before a platform or Debian-major transition.
 
 | Symptom | Check |
 |---|---|
+| flasher does not accept `.img.xz` | decompress to `.img`, then write that raw image |
 | U-Boot stops at prompt | current image and FAT `boot.scr` |
 | unexpected RAM | `grep MemTotal /proc/meminfo`; confirm fitted DDR |
 | no Ethernet | `networkctl`, `ip link`, `ip address` |

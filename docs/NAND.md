@@ -2,7 +2,7 @@
 
 This document is the source of truth for NAND geometry, ECC, raw boot layout,
 SPL behavior, UBI and NAND recovery boundaries. Installation steps are summarized
-in [Installation](INSTALLATION.md); platform updates are owned by
+in [Installation](INSTALLATION.md); platform updates are documented in
 [Upgrading](UPGRADING.md).
 
 AtlANTian installs from the unified microSD image into the on-board 256 MiB raw
@@ -106,25 +106,34 @@ actual NAND.
 
 ## Factory backup
 
-Before destructive installation AtlANTian creates and verifies:
+Before destructive installation AtlANTian creates and verifies a factory backup
+under `/root/atlantian-factory-nand-backup`.
+
+Required recovery set:
 
 ```text
-/root/atlantian-factory-nand-backup/
-├─ NAND-INFO.txt
-├─ nand-raw-oob.bin
-├─ nand-main-padded.bin
-└─ SHA256SUMS
+NAND-INFO.txt
+nand-raw-oob.bin
+SHA256SUMS
 ```
 
-Backup reads use `nanddump --noecc`; the raw+OOB copy preserves the data/OOB view
-and factory bad-block markers without reinterpreting them through the active ECC
+`nand-raw-oob.bin` is the primary forensic/recovery artifact. Backup reads use
+`nanddump --noecc --oob --bb=dumpbad`, preserving physical page order, OOB bytes
+and factory bad-block markers without interpreting them through the active ECC
 layout.
+
+The backup helper also attempts to create `nand-main-padded.bin`, an address-stable
+main-area copy useful for inspection. That file is **optional**: if the padded
+main-area dump fails, AtlANTian removes the incomplete file, records the failure
+in `NAND-INFO.txt` and still accepts the verified raw+OOB recovery set.
 
 > [!CAUTION]
 > Never restore raw+OOB NAND with generic block-device `dd`.
 
-Keep a copy of this backup outside the recovery SD before relying on factory
-restore.
+Keep a verified copy outside the recovery SD before relying on factory recovery.
+The repository currently provides the verified backup path; a controlled factory
+restore remains a separate hardware-validation procedure rather than an automated
+one-command restore feature.
 
 ## Installation transaction
 
@@ -193,4 +202,4 @@ Still requiring dedicated bench validation:
 - controlled factory raw+OOB restore.
 
 See [Hardware support](hardware-support-matrix.md) for the status matrix and
-[Upgrading](UPGRADING.md) for release-to-release NAND maintenance.
+[Hardware validation](HARDWARE-VALIDATION.md) for the bench checklist.

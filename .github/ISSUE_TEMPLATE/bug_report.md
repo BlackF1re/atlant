@@ -30,7 +30,9 @@ Describe the observed behaviour and why it is a problem.
 ## Relevant logs
 
 Paste the smallest relevant excerpt from UART, `journalctl`, or the command
-output. Remove credentials, IP addresses and other private data first.
+output. Remove credentials, access tokens, public/sensitive addresses and other
+private data. Keep harmless local network details when they are required to
+reproduce a networking problem.
 
 ```
 

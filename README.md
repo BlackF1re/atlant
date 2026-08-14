@@ -4,8 +4,8 @@
 
 **AtlANTian** is a compact Debian-based GNU/Linux distribution for the Bitmain
 Antminer S9 control board. It turns the Xilinx Zynq-7010 into a general-purpose
-Linux/FPGA system and publishes one ready-to-flash image for microSD use and
-optional installation to the on-board NAND.
+Linux/FPGA system and publishes one ready-to-flash microSD image with the matching
+optional NAND installer/recovery payload.
 
 Generic software sees a normal Debian system (`ID=debian`); AtlANTian keeps its
 own visible OS/release identity. Standard APT packages and normal Debian tooling
@@ -38,9 +38,10 @@ work as expected.
    sha256sum -c SHA256SUMS --ignore-missing
    ```
 
-3. Rufus, Raspberry Pi Imager and Etcher can write the `.img.xz` directly. On
-   Linux, stream it through `xz` into `dd` as shown in
-   [SD Quick Start](docs/QUICKSTART.md).
+3. Write the image with a raw-image flasher such as Rufus, Raspberry Pi Imager or
+   Etcher. If your installed version accepts `.img.xz`, select it directly;
+   otherwise decompress it to `.img` first. On Linux, the image can be streamed
+   through `xz` into `dd` as shown in [SD Quick Start](docs/QUICKSTART.md).
 4. Power off the board, select physical **SD** boot, insert the card and connect
    Ethernet or UART.
 5. Apply 12 V and wait for automatic ROOT expansion and one reboot.
@@ -48,7 +49,8 @@ work as expected.
    network.
 
 The initial root password is empty for first provisioning. See
-[SD Quick Start](docs/QUICKSTART.md) for flashing, provenance and troubleshooting.
+[SD Quick Start](docs/QUICKSTART.md) for exact flashing, provenance and
+troubleshooting steps.
 
 ## Supported hardware
 
@@ -60,9 +62,9 @@ The initial root password is empty for first provisioning. See
 | Gigabit Ethernet | Ready; DHCP |
 | UART | Ready; `ttyPS0`, `115200 8N1` |
 | 256 MiB Micron NAND | Ready; install, cold boot and reboot validated on 512 MiB and 1 GiB boards |
-| FPGA | FPGA Manager/Region, configfs overlays and optional profiles |
+| FPGA | Ready; FPGA Manager/Region, configfs overlays and optional profiles |
 | LEDs, buttons, XADC, watchdog | Ready |
-| PS USB0 | Disabled because of a known MIO routing collision |
+| PS USB0 | Unavailable because of a known MIO routing collision |
 | RTC | Not fitted |
 
 See [Hardware support](docs/hardware-support-matrix.md) for the evidence/status
@@ -90,7 +92,8 @@ payload, then creates the UBI/SquashFS/UBIFS system.
 
 The backup is stored on the recovery SD under
 `/root/atlantian-factory-nand-backup`; copy it elsewhere if factory recovery
-matters. NAND internals and recovery rules are owned by [NAND](docs/NAND.md).
+matters. NAND internals and recovery boundaries are documented in
+[NAND](docs/NAND.md).
 
 ## Packages and updates
 
@@ -116,22 +119,21 @@ atlantian-sysupgrade
 | AtlANTian base/kernel/boot | verified in-place package update | stage verified NAND bundle on the paired recovery SD, then continue maintenance from SD |
 | Debian-major transition | explicit AtlANTian release-line transition | clean NAND reinstall |
 
-Debian prerelease ordering is retained **inside** package metadata (for example
-`13.1.0~alpha.8-1`). Public GitHub asset filenames use `.` in place of `~`
-(for example `atlantian-kernel_13.1.0.alpha.8-1_<arch>.deb`). The updater verifies
-the downloaded package's Package/Version/Architecture fields and public checksum;
+For a prerelease `X.Y.Z-alpha.N`, Debian package metadata uses
+`X.Y.Z~alpha.N-1`, while public GitHub `.deb` filenames replace `~` with `.`.
+The updater verifies Package, Version, Architecture and the published checksum;
 it does not infer package identity from the filename alone.
 
-**Image Downloads** is the cumulative sum of GitHub `download_count` values for
-only `atlantian-<release>.img.xz` assets across all releases. It is refreshed after
-a release is published and hourly, so it does not reset when a new version is
-published; package, checksum and metadata downloads are excluded. **System Updates**
-is the corresponding cumulative sum for the tiny stable `atlantian-update.json`
-marker, fetched when an actual AtlANTian update transaction starts. Both totals use
-the same hourly GitHub Pages refresh. No device identifier is sent; these are GitHub
-asset counters, not unique-user/device counts. GitHub and Shields may cache the
-displayed value briefly. CI validation uses private Actions artifacts and does not
-touch either counter.
+**Image Downloads** is the cumulative GitHub `download_count` for only
+`atlantian-<release>.img.xz` assets. **System Updates** is the corresponding sum
+for the tiny `atlantian-update.json` marker fetched once when a real update
+transaction starts. The Pages-backed totals refresh after publication and hourly;
+a completed `Build & Release` refreshes them only when that workflow actually
+published a release. No AtlANTian installation or device identifier is added to
+these requests. The badges are aggregate download-event counters, not unique
+user/device counters, and GitHub/Shields caching can delay the displayed value.
+CI validation uses private Actions artifacts and does not download either public
+metric asset.
 
 The full user-facing update contract lives in [Upgrading](docs/UPGRADING.md).
 
@@ -154,7 +156,7 @@ the [hardware matrix](docs/hardware-support-matrix.md).
 AtlANTian versions include the Debian major generation:
 
 ```text
-13.1.0-alpha.8
+13.1.0-alpha.N
 │  │ │    └─ prerelease channel and sequence
 │  │ └────── AtlANTian patch
 │  └──────── AtlANTian release line
@@ -170,17 +172,16 @@ qualifying push in a fresh repository bootstraps a verified release immediately.
 After that, normal source/build-input pushes are batched: the fifth qualifying
 commit since the previous release triggers the full build, verification and
 publication. A validated Debian Snapshot refresh and an explicit manual publish
-bypass the batch threshold. Documentation, workflow-only maintenance and release-
-presentation-only changes are outside the release-build path. Debian-major
-transitions remain explicit decisions.
+bypass the batch threshold. Documentation, workflow-only maintenance and
+release-presentation-only changes are outside the release-build path.
+Debian-major transitions remain explicit decisions.
 
-The **Release Pipeline** badge reports the outcome of that orchestration workflow;
-a green plan-only run does not claim that every current `main` SHA has a binary
+The **Release Pipeline** badge reports the result of the orchestration workflow;
+a green plan-only run does not mean that every current `main` SHA has a binary
 image. Published releases are the fully built and verified binary states.
 
-Prereleases use Debian-native package ordering, for example
-`13.1.0~alpha.8-1`. Every release records its exact Debian Snapshot, source
-revision and publishing repository.
+Every release records its exact Debian Snapshot, source revision and publishing
+repository.
 
 ## Build from source
 
@@ -198,7 +199,7 @@ sealed as a SHA-specific verified workflow artifact before publication; a later
 publication retry for the same SHA can reuse that artifact instead of rebuilding
 it. The sealed artifact keeps the raw `.img` and canonical Debian filenames for
 CI; publication normalizes only the public filenames and writes a public
-`SHA256SUMS` covering exactly the downloadable payloads.
+`SHA256SUMS` for the downloadable payload.
 
 See [Pipeline](docs/PIPELINE.md) for the CI/release contract.
 
@@ -207,7 +208,7 @@ See [Pipeline](docs/PIPELINE.md) for the CI/release contract.
 - `poweroff` halts Linux but cannot disconnect the external 12 V supply.
 - Suspend/hibernate is not advertised as a validated recoverable state.
 - No battery-backed RTC is fitted.
-- PS USB0 remains disabled because of the known MIO collision.
+- PS USB0 remains unavailable because of the known MIO collision.
 - Raw+OOB NAND backups must not be restored with generic block-device `dd`.
 
 ## Documentation

@@ -30,31 +30,25 @@ Stable installations do not opt into prereleases. An installation already on an
 alpha/beta/rc line may receive newer prereleases until the stable release is
 reached.
 
-Automatic CI publication and Debian Snapshot refreshes may therefore make a new
-AtlANTian version available without any manual version edit in the source tree.
+Automatic CI publication and Debian Snapshot refreshes can make a new AtlANTian
+version available without a manual version edit in the source tree.
 
 ### Release version vs Debian package version
 
-AtlANTian release identity and Debian package identity are related but not the
-same string. For a prerelease such as:
+AtlANTian release identity and Debian package identity are related but use
+different strings. For a prerelease:
 
 ```text
-AtlANTian release:       13.1.0-alpha.8
-Debian package Version:  13.1.0~alpha.8-1
-public .deb filename:    atlantian-kernel_13.1.0.alpha.8-1_armhf.deb
+AtlANTian release:       X.Y.Z-alpha.N
+Debian package Version:  X.Y.Z~alpha.N-1
+public .deb filename:    atlantian-kernel_X.Y.Z.alpha.N-1_armhf.deb
 ```
 
-The `~` remains inside the package metadata because Debian uses it to sort a
-prerelease before the corresponding stable version. Public GitHub asset names use
-`.` in that filename position. `atlantian-release-check` understands both the
-public GitHub form and a canonical `~` filename used by mirrors; `atlantian-sysupgrade`
-verifies the actual Package, Version and Architecture fields inside every
-`.deb`, plus its published SHA-256, before installation.
-
-For historical prereleases where GitHub normalized a `~` filename after upload
-but `SHA256SUMS` still contained the canonical Debian basename, the updater also
-accepts that checksum alias for the same internally verified package. New
-releases publish checksums using the exact public filenames.
+The `~` stays inside Debian package metadata because Debian sorts it before the
+corresponding stable version. Public GitHub filenames replace that `~` with `.`.
+`atlantian-sysupgrade` verifies Package, Version, Architecture and published
+SHA-256 rather than trusting the filename. Legacy prerelease naming used by older
+AtlANTian releases remains accepted for compatibility.
 
 ## Ordinary Debian package maintenance
 
@@ -67,8 +61,8 @@ apt install <package>
 ```
 
 On SD, writes go directly to ext4 ROOT. On NAND, writes go to the active OverlayFS
-upper (internal UBIFS or adopted recovery-SD upper). This does not replace the
-immutable NAND base or raw boot region.
+upper: internal UBIFS or adopted recovery-SD upper. Ordinary APT does not replace
+the immutable NAND base or raw boot region.
 
 ## SD platform update
 
@@ -81,8 +75,8 @@ atlantian-sysupgrade
 For a same-major release, the updater:
 
 1. discovers a complete compatible Release;
-2. downloads the exact three advertised AtlANTian `.deb` assets and public
-   `SHA256SUMS`;
+2. after confirmation, records the best-effort update marker and downloads the
+   exact three advertised AtlANTian `.deb` assets plus `SHA256SUMS`;
 3. verifies package identity and checksum independently of the filename;
 4. installs the version-locked platform/kernel/release package set;
 5. refreshes Debian packages from the installed release's managed repositories;
@@ -91,10 +85,10 @@ For a same-major release, the updater:
 The kernel/platform/release package set is not intentionally mixed across
 AtlANTian releases.
 
-The package post-install scripts update FAT boot files using per-file
+Package post-install scripts update FAT boot files using per-file
 write-then-rename replacement. Each file replacement is atomic, but the complete
 multi-file boot set is **not one filesystem transaction**. Do not cut power during
-a platform update; recovery remains the SD image/reflash path if an interruption
+a platform update; reflash/recovery from SD remains the fallback if interruption
 leaves mixed boot assets.
 
 ## Same-major NAND platform update
@@ -109,7 +103,8 @@ The NAND updater:
 
 1. selects the newest compatible same-major release;
 2. requires the paired install/recovery card;
-3. downloads the matching `atlantian-nand-<release>.tar.zst` to that card;
+3. after confirmation, records the best-effort update marker and downloads the
+   matching `atlantian-nand-<release>.tar.zst` to that card;
 4. verifies public `SHA256SUMS`, bundle checksums and release identity;
 5. records the prepared target on the recovery SD;
 6. asks for physical **NAND → SD** handoff;
@@ -132,7 +127,7 @@ Persistent user/admin deltas are captured from:
 ```
 
 Package-management state under `/var/lib` is excluded where copying it would bind
-the new base to the old dpkg/APT/systemd/ucf/initramfs state. Package payload
+the new base to old dpkg/APT/systemd/ucf/initramfs state. Package payload
 namespaces such as `/usr`, `/bin` and `/lib` are not copied from the old upper.
 Manual package intent and package holds are recorded separately.
 
@@ -162,38 +157,39 @@ internal upper.
 
 ## Download metrics
 
-Every release publishes a versioned user image:
+Every release publishes the versioned image:
 
 ```text
 atlantian-<release>.img.xz
 ```
 
-The **Image Downloads** badge sums GitHub's `download_count` only for assets
-matching that pattern across all releases. It refreshes after release publication
-and hourly, so a new image begins at zero without discarding downloads of earlier
-versioned images. Packages, checksums and metadata are excluded.
+**Image Downloads** sums GitHub's public `download_count` for only those image
+assets across all releases. Package, checksum and metadata downloads are excluded.
 
 Every release also publishes the tiny stable `atlantian-update.json` marker.
 `atlantian-sysupgrade --check` and `--notes` do **not** download it. After the user
-confirms an update (or uses `--yes`), the SD/NAND updater attempts to fetch it once
-and caches the valid marker for that target release. Failure to fetch or validate
-the marker never blocks the update.
+confirms an update, or uses `--yes`, the SD/NAND updater attempts to fetch it once
+and caches a valid marker for that target release. Failure to fetch or validate the
+marker never blocks the update.
 
-The **System Updates** badge uses the same GitHub Pages refresh as Image Downloads:
-it sums `download_count` only for `atlantian-update.json` assets across all
-releases, after publication and hourly. It excludes packages, images, checksums and
-metadata.
+**System Updates** sums `download_count` only for those update-marker assets. It is
+therefore an approximate count of update transactions that reached this stage,
+not a count of unique boards and not proof that every update completed. Deleting
+the staging cache and starting the same target again can add another download.
 
-No installation ID, serial number, IP-derived token or other device identifier is
-sent by AtlANTian. GitHub only records its normal Release-asset download count.
-Consequently **System Updates is not a unique-device counter** and does not prove
-that every started update completed successfully. Clearing the staging cache and
-retrying can also add another download.
+AtlANTian adds no installation ID, serial number or device token to the marker
+request. The public badges consume only GitHub's aggregate Release-asset
+`download_count`; they make no claim about what network/service logs GitHub itself
+may retain.
 
-GitHub and Shields may cache a displayed count briefly, so a badge is not a
-real-time transaction meter. CI release-upgrade validation uses retained,
-SHA-sealed GitHub Actions artifacts rather than public Release assets, so
-production validation does not increase either user-facing counter.
+The Pages-backed totals and per-file Release counters refresh after publication
+and hourly. A completed `Build & Release` triggers the refresh only when a Release
+exists for that exact source SHA, so plan-only runs do not perform a Pages deploy.
+GitHub and Shields caching can delay the displayed value.
+
+CI release-upgrade validation uses retained, SHA-sealed Actions artifacts rather
+than public Release assets, so production validation does not increase the image
+or update-marker counters.
 
 ## Debian-major transition
 

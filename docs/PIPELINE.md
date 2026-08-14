@@ -1,12 +1,13 @@
 # Build and release pipeline
 
-This document owns CI/release behavior: triggers, automatic versioning, verified
-artifacts, publication and reproducibility. Debian Snapshot discovery itself is
-documented in [Debian lifecycle](DEBIAN-LIFECYCLE.md).
+This document owns CI/release behavior: triggers, automatic versioning, protected
+maintenance merges, verified artifacts, publication and download-metric refreshes.
+Debian Snapshot discovery itself is documented in
+[Debian lifecycle](DEBIAN-LIFECYCLE.md).
 
-## What triggers a production build
+## Production triggers
 
-`Build & Release` can start in three ways:
+`Build & Release` can start in these ways:
 
 | Trigger | Build | Publish |
 |---|---|---|
@@ -28,38 +29,49 @@ scripts/**
 systemd/**
 ```
 
-Documentation and workflow-only maintenance are intentionally excluded from the
-full release-build path. `scripts/generate-release-notes.sh` is explicitly
-excluded because it changes publication presentation rather than image contents.
+Documentation and workflow-only maintenance are excluded from the full release
+build path. `scripts/generate-release-notes.sh` is also excluded because it changes
+publication presentation rather than image contents.
 
-After the first published release, automatic source publication batches five
-qualifying commits since the last version tag. This prevents small incremental
-changes from each producing a new large image. With no AtlANTian release tag,
-`release-batch-state.sh` deliberately reports the threshold as ready so a freshly
-imported repository publishes its first verified release immediately instead of
-waiting for four unrelated follow-up edits.
-
-A manual dispatch with `publish=true`, and the Debian Watch path, bypass this batch
-threshold when an immediate verified release is needed.
-
-Debian Watch does **not** bypass protected `main`. A changed Snapshot is committed
-on a short-lived `maintenance/debian-snapshot-*` branch and proposed through a pull
-request. Because `main` requires an up-to-date branch, the watcher asks GitHub for
-the PR's exact synthetic merge candidate, exposes that immutable commit through a
-short-lived `maintenance-validation/*` branch and explicitly runs the same
-`CI / Validate` job on that merge-candidate SHA. It separately pins the original
-base/head pair, rechecks `main`, the PR head and the merge candidate after CI, and
-squash-merges through GitHub's protected-branch API only if all identities are
-unchanged. The watcher then dispatches `Build & Release` against the resulting
-exact `main` SHA with `origin=debian-watch`. Its inactivity heartbeat uses the
-same protected merge path but never dispatches a release build.
+After the first release, automatic source publication batches five qualifying
+commits since the latest version tag. A fresh repository deliberately treats the
+no-release state as bootstrap-ready so the first qualifying push publishes a
+verified release immediately. Manual `publish=true` and Debian Watch bypass the
+five-commit threshold when an immediate release is required.
 
 A newer run on the same ref cancels an older in-progress release run. Publication
-also requires the built SHA to still be the current `main` tip.
+also requires the built source SHA to remain the current `main` tip.
+
+## Protected Debian maintenance
+
+Debian Watch never pushes directly to protected `main` and has no protection
+bypass. When a Snapshot changes it:
+
+1. creates a short-lived `maintenance/debian-snapshot-*` branch and PR;
+2. asks GitHub for the PR's exact synthetic merge candidate;
+3. exposes that immutable candidate through a short-lived
+   `maintenance-validation/*` branch;
+4. explicitly dispatches the normal `CI / Validate` workflow on that exact
+   candidate and waits for success;
+5. verifies that `main`, the maintenance head and GitHub's merge candidate did not
+   move during validation;
+6. publishes a `Validate=success` commit status linked to that successful CI run
+   so the token-created PR satisfies the repository's required-status interface;
+7. squash-merges through GitHub's protected-branch merge API;
+8. verifies the resulting `main` SHA and explicitly dispatches `Build & Release`
+   with `origin=debian-watch`.
+
+The status bridge records the result of real merge-candidate CI; it is not a
+replacement for validation and cannot be written before that CI succeeds. The
+explicit dispatches are necessary because events created with the workflow's
+`GITHUB_TOKEN` do not recursively create the normal PR/push workflow chain.
+
+The inactivity heartbeat uses the same protected merge path but changes no release
+input and never dispatches a release build.
 
 ## Automatic release identity
 
-The configured release line is:
+The release line is:
 
 ```text
 <Debian major>.<AtlANTian minor>.<AtlANTian patch>[-prerelease]
@@ -68,34 +80,33 @@ The configured release line is:
 Examples:
 
 ```text
-13.1.0-alpha.8
-13.1.0-beta.1
-13.1.0-rc.1
+13.1.0-alpha.N
+13.1.0-beta.N
+13.1.0-rc.N
 13.1.0
 13.1.1
 ```
 
 `config/release.env` defines the Debian generation, AtlANTian minor/initial patch
-and prerelease channel. `scripts/resolve-release-version.sh` resolves the
-publishable version from existing repository tags:
+and prerelease channel. `scripts/resolve-release-version.sh` derives the next
+publishable version from repository tags:
 
-- a prerelease channel increments its numeric sequence (`alpha.8 → alpha.9`);
-- changing channel starts from that channel's configured sequence
-  (`alpha.N → beta.1`);
+- a prerelease channel increments its numeric sequence;
+- changing channel starts from that channel's configured sequence;
 - a stable line increments the patch when that stable version already exists;
-- rerunning the exact already-tagged source SHA resolves back to its existing
-  version instead of inventing another one.
+- rerunning an already-tagged source SHA resolves to that existing version rather
+  than inventing another one.
 
 Source revision and Debian Snapshot timestamp are metadata, not release-ordering
-components. Debian package metadata uses native prerelease ordering, e.g.
-`13.1.0~alpha.8-1`.
+components. For prereleases, Debian package metadata retains native ordering, for
+example `X.Y.Z~alpha.N-1` for release `X.Y.Z-alpha.N`.
 
 A Debian-major transition remains explicit because it changes the release line
 itself.
 
 ## Plan → build → publish
 
-Production CI is deliberately split into separate jobs:
+Production CI is split into separate jobs:
 
 ```text
 plan
@@ -107,155 +118,164 @@ seal SHA-specific verified artifact
 publish (only when requested and eligible)
 ```
 
-A successful plan-only run is an orchestration result, not a claim that the
-current `main` SHA has a binary image. Published releases are the source revisions
-that completed the full binary build and verification path.
+A successful plan-only run is an orchestration result, not evidence that the
+current `main` SHA has a binary image. Published releases are the revisions that
+completed the binary build/verification path.
 
 ### Plan
 
-The plan job resolves the version and decides whether a build is necessary.
+The plan job resolves the version and decides whether a build is necessary. For
+publication requests it checks:
 
-For publication requests it checks:
+1. whether the exact version is already published for the exact source SHA;
+2. whether a non-expired verified artifact already exists for that source SHA.
 
-1. whether the exact version is already published for this exact source SHA;
-2. whether a non-expired verified artifact already exists for this source SHA.
-
-If the release already exists for the same SHA, the workflow becomes an
-idempotent no-op. If a verified artifact exists, publication can reuse it.
+A same-version/same-SHA release is an idempotent no-op. A compatible verified
+artifact can be reused for publication.
 
 ### Build and verify
 
-A required build performs the full expensive path:
+A required build performs the expensive path:
 
 - source/build contract checks, including release-client/public-filename tests;
 - frozen release-input validation;
 - Debian rootfs build;
 - pinned Linux build;
 - SD/NAND U-Boot and NAND payload build;
-- final unified raw image creation;
-- XZ compression and raw/decompressed SHA-256 equivalence check;
+- unified raw image creation;
+- XZ compression plus raw/decompressed SHA-256 equivalence check;
 - release artifact validation;
 - SD image layout validation;
 - NAND artifact validation;
 - SD upgrade integration test;
 - NAND rebase integration test;
 - source-tree integrity check;
-- Sigstore/GitHub build provenance attestation.
+- GitHub/Sigstore build provenance attestation.
 
 The raw `atlantian-<release>.img` remains inside the verified Actions artifact so
-layout and release-upgrade gates can operate on the exact disk image without
-using a public Release download. The user-facing asset is
-`atlantian-<release>.img.xz`.
+layout and upgrade gates can use the exact disk image without a public Release
+download. The user-facing image is `atlantian-<release>.img.xz`.
 
-The SD upgrade integration test resolves an older published release by tag, but
-loads its raw image from the matching SHA-sealed GitHub Actions artifact. It never
-downloads the public Release image, so CI does not inflate user-facing download
-metrics.
+The SD upgrade integration test resolves an older published release by tag but
+loads its raw image from the matching SHA-sealed Actions artifact. It therefore
+does not inflate public image-download counters.
 
-The build then adds:
+The build records:
 
 ```text
 VERIFIED-SOURCE-SHA
 VERIFIED-VERSION
 ```
 
-and uploads `atlantian-verified-<full-source-SHA>` as a workflow artifact with a
-90-day retention period. That artifact contains both the raw `.img` and verified
-`.img.xz`, canonical Debian `.deb` filenames and its internal checksum manifest.
-
-A failed publication therefore does not erase the successful build result. A
-later publish retry for the same SHA can download, verify and reuse the sealed
-artifact rather than rebuilding the OS.
+and uploads `atlantian-verified-<full-source-SHA>` with a 90-day retention period.
+The sealed artifact contains the raw `.img`, verified `.img.xz`, canonical Debian
+`.deb` filenames and its internal checksum manifest. A failed publication can
+therefore be retried for the same SHA without rebuilding the OS while that
+artifact remains available.
 
 ### Publish
 
 Publication is allowed only when:
 
-- publication was requested by a qualifying push, Debian Watch, or manual
+- publication was requested by a qualifying push, Debian Watch or manual
   `publish=true`;
-- the plan/build path succeeded or a verified artifact was reused;
+- the build succeeded or a verified same-SHA artifact was reused;
 - the workflow source SHA is still current `main`;
-- the target release/tag does not belong to another source revision.
+- the target tag/release does not belong to another source revision.
 
-Before any publication transformation, CI re-verifies the sealed artifact's
-source marker, version marker, internal `SHA256SUMS`, raw/compressed image pair and
+Before publication transformation, CI re-verifies the sealed artifact's source
+marker, version marker, internal checksum manifest, raw/compressed image pair and
 exact three-package `.deb` set.
 
-`generate-release-notes.sh` then invokes `prepare-public-release.sh` on the local
-publication copy. That step:
+`prepare-public-release.sh` then transforms only a local publication copy:
 
-1. proves the compressed image still decodes to the sealed raw image;
+1. proves `.img.xz` still decodes to the sealed raw image;
 2. keeps Debian package `Version` metadata unchanged;
 3. normalizes only public prerelease `.deb` filenames from `~` to `.`;
-4. creates the deterministic `atlantian-update.json` marker;
-5. rewrites the **public** `SHA256SUMS` to cover exactly the downloadable payload
-   names, not the private raw image;
-6. generates Release Notes from those exact public filenames.
+4. creates deterministic `atlantian-update.json`;
+5. writes the public `SHA256SUMS` for exactly the downloadable payload names;
+6. lets `generate-release-notes.sh` describe those exact public files.
 
-The raw `.img` remains in the local/Actions artifact but is deliberately **not**
+The raw `.img` remains private to the verified Actions artifact and is not
 uploaded to GitHub Releases.
 
 Release assets are uploaded in this logical order:
 
 1. `atlantian-<release>.img.xz`;
-2. installed-system update payloads (`.deb` packages and NAND bundle);
+2. installed-system update payloads: NAND bundle and three `.deb` packages;
 3. `atlantian-update.json` and `RELEASE-METADATA.json`;
 4. public `SHA256SUMS`.
 
-For a prerelease, the distinction is intentional:
+For prerelease packages the distinction is intentional:
 
 ```text
-Debian package Version:  13.1.0~alpha.8-1
-public asset filename:    atlantian-kernel_13.1.0.alpha.8-1_<arch>.deb
+release:                 X.Y.Z-alpha.N
+Debian package Version:  X.Y.Z~alpha.N-1
+public asset filename:   atlantian-kernel_X.Y.Z.alpha.N-1_<arch>.deb
 ```
 
-The updater validates internal Package/Version/Architecture fields and SHA-256,
-so the filename is not treated as package identity.
+The updater validates Package/Version/Architecture fields and SHA-256, so the
+filename is not package identity.
 
-Existing release history is never rewritten automatically:
+### Immutable release identity vs mutable presentation
+
+Automatic publication never changes the identity or payload of an existing
+release:
 
 - an existing tag pointing at another SHA is a hard conflict;
 - an existing release for another SHA is a hard conflict;
-- automatic publication never retargets an existing tag;
-- a concurrent release for the same tag/SHA is treated as an idempotent success.
+- tags are never retargeted automatically;
+- a concurrent same-tag/same-SHA publication is idempotent.
+
+Release **descriptions** are presentation metadata and are treated separately.
+The Download Metrics workflow may idempotently normalize historical `Artifacts`
+tables so they use the current per-file Downloads column. It does not retarget a
+tag, replace release assets or alter release identity.
 
 ## Products
 
 | Artifact | Purpose |
 |---|---|
-| `atlantian-<release>.img.xz` | versioned, compressed SD system and matching NAND installer/recovery source; directly accepted by supported flashers |
+| `atlantian-<release>.img.xz` | versioned compressed SD system and matching NAND installer/recovery source |
 | `atlantian-nand-<release>.tar.zst` | checksummed NAND raw-boot + SquashFS payload |
 | three version-matched `.deb` files | AtlANTian platform/kernel/release updates; public filename is GitHub-safe while internal Debian Version stays canonical |
 | `atlantian-update.json` | best-effort anonymous update-transaction counter marker; not trusted package identity |
 | `RELEASE-METADATA.json` | release, Debian Snapshot, source and measured raw-image storage metadata |
-| `SHA256SUMS` | hashes for exactly the public downloadable payload names |
+| `SHA256SUMS` | hashes for the public downloadable payload names |
 
 The SD filesystem is not copied wholesale into NAND.
 
-## Download-counter isolation
+## Download metrics
 
-The README **Image Downloads** and **System Updates** badges are backed by one small
-JSON file deployed to GitHub Pages. The metric workflow reads every GitHub Release,
-sums `download_count` separately for names matching `atlantian-<release>.img.xz`
-and exactly `atlantian-update.json`, then deploys both cumulative totals after
-publication and hourly. Deployments create neither a branch nor repository commits.
+`Download Metrics` deploys one small `image-downloads.json` to GitHub Pages. It
+contains:
 
-The same Pages payload also stores a **per-asset** counter for every file in every
-release. Each `(tag, asset name)` pair is mapped to a deterministic SHA-256-derived
-key so filenames containing dots, tildes or other punctuation never have to be
-embedded directly in a JSONPath expression. Release Notes use those values in the
-third **Downloads** column of the `Artifacts` table through Shields dynamic JSON
-badges. The badge therefore changes as GitHub's own `download_count` changes while
-the release description itself remains static.
+- cumulative image downloads: sum of GitHub `download_count` for
+  `atlantian-<release>.img.xz`;
+- cumulative system-update starts: sum for `atlantian-update.json`;
+- a keyed per-asset `download_count` for every file in every release.
 
-On the first metric refresh after this feature is introduced, the workflow
-idempotently normalizes historical `Artifacts` tables from the actual GitHub asset
-list and adds the same dynamic Downloads column. Later hourly runs do not rewrite
-already-canonical release descriptions; they only refresh the Pages JSON.
+A deterministic SHA-256-derived key represents each `(tag, asset name)` pair, so
+release filenames do not have to be embedded directly in Shields JSONPath
+expressions. Release Notes use those keys in the **Downloads** column of each
+`Artifacts` table.
 
-The stable `atlantian-update.json` asset is the anonymous, best-effort marker for
-actual updater transactions. CI never downloads either public metric asset: old raw
-images come from retained SHA-sealed Actions artifacts instead.
+The metric workflow can start from a release event, manually, hourly, or after a
+`Build & Release` run completes. The `workflow_run` path has a cheap gate: it
+refreshes Pages only if that Build & Release succeeded **and** a published Release
+exists for its exact head SHA. Plan-only runs therefore do not cause a Pages
+refresh. Automated releases use this completion path because a release created by
+`GITHUB_TOKEN` does not recursively trigger the normal `release` workflow event.
+
+On the first applicable refresh after table-format changes, historical release
+descriptions may be normalized idempotently from the actual GitHub asset list.
+Later hourly runs update the Pages JSON without rewriting already-canonical
+release descriptions.
+
+The update marker is downloaded by a real updater transaction only after user
+confirmation; checks/notes do not fetch it. CI obtains old images from retained
+SHA-sealed Actions artifacts instead of public Release assets, so production
+validation does not increase either user-facing counter.
 
 ## Reproducible inputs and caches
 
@@ -273,9 +293,9 @@ Caches are performance optimizations only:
 | Linux | pinned source/build tree keyed by source/config/toolchain inputs |
 | U-Boot | pinned source tree |
 
-Rootfs, final SD image and NAND products are rebuilt when a build is required.
+Rootfs, final SD image and NAND products are rebuilt whenever a build is required.
 The separate **verified workflow artifact** is what avoids rebuilding an already
-successful source SHA during publication retry.
+successful source SHA during a publication retry.
 
 A fresh repository needs no cache bootstrap.
 
@@ -285,23 +305,21 @@ The source tree can be imported into a new GitHub repository without carrying
 tags, releases, caches, workflow artifacts or secrets. Runtime release identity
 is derived from `${{ github.repository }}` and stamped into the image/packages.
 
-Expected sequence:
-
 ```text
 source tree
   ↓
 first qualifying push to new repository main
   ↓
-batch planner treats no-release state as bootstrap-ready
+no-release state is bootstrap-ready
   ↓
 automatic build + verification + publication
   ↓
 v<resolved-version> release
 ```
 
-Only subsequent source changes use the normal five-qualifying-commit batch.
-The release workflow uses scoped `GITHUB_TOKEN` permissions; no repository secret
-is required for normal GitHub publication.
+Only subsequent source changes use the five-qualifying-commit batch. Normal GitHub
+publication uses scoped `GITHUB_TOKEN` permissions and requires no repository
+secret.
 
 ## Build graph
 
