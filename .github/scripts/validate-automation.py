@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 DEPENDABOT = ROOT / ".github" / "dependabot.yml"
+PROTECTED_MERGE = ROOT / ".github" / "scripts" / "merge-protected-main.sh"
 
 EXPECTED_WORKFLOWS = {
     "ci.yml": "CI",
@@ -21,7 +23,11 @@ EXPECTED_WORKFLOWS = {
 EXPECTED_PERMISSIONS = {
     "ci.yml": {"contents": "read"},
     "build-release.yml": {"contents": "read"},
-    "debian-watch.yml": {"contents": "write", "actions": "write"},
+    "debian-watch.yml": {
+        "actions": "write",
+        "contents": "write",
+        "pull-requests": "write",
+    },
     "dependabot-actions-automerge.yml": {
         "actions": "write",
         "contents": "write",
@@ -29,6 +35,9 @@ EXPECTED_PERMISSIONS = {
     },
     "image-download-metrics.yml": {"contents": "read", "pages": "write", "id-token": "write"},
 }
+DIRECT_MAIN_PUSH_RE = re.compile(
+    r"\bgit\s+push\b[^\n]*(?:\borigin\s+main\b|\bHEAD:main\b|\brefs/heads/main\b)"
+)
 
 
 def fail(message: str) -> "NoReturn":
@@ -92,6 +101,9 @@ def validate_workflows() -> None:
     parsed: dict[str, dict] = {}
     for filename, expected_name in EXPECTED_WORKFLOWS.items():
         path = discovered[filename]
+        raw = path.read_text(encoding="utf-8")
+        if DIRECT_MAIN_PUSH_RE.search(raw):
+            fail(f"{filename}: workflows must never push directly to protected main")
         data = load_yaml(path)
         parsed[filename] = data
         if data.get("name") != expected_name:
@@ -124,6 +136,17 @@ def validate_workflows() -> None:
         checkout = checkout_step(parsed[filename])
         if (checkout.get("with") or {}).get("persist-credentials") is not False:
             fail(f"{filename}: checkout credentials must not persist")
+
+    ci = parsed["ci.yml"]
+    ci_dispatch = (workflow_trigger(ci) or {}).get("workflow_dispatch") or {}
+    ci_inputs = ci_dispatch.get("inputs") or {}
+    for name in ("base_sha", "head_sha"):
+        spec = ci_inputs.get(name) or {}
+        if spec.get("required") is not True or spec.get("type") != "string":
+            fail(f"ci.yml: explicit validation input {name!r} must be a required string")
+    scope_step = step_named(ci, "validate", "Detect validation scope")
+    require_run(scope_step, "workflow_dispatch", "explicit protected-branch validation")
+    require_run(scope_step, 'git merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"', "explicit validation ancestry")
 
     build = parsed["build-release.yml"]
     publish_job = (build.get("jobs") or {}).get("publish", {})
@@ -208,15 +231,25 @@ def validate_workflows() -> None:
         fail("build-incremental.sh must expose the CI preflight skip and artifact-only stage")
 
     watcher = parsed["debian-watch.yml"]
-    schedule = workflow_trigger(watcher).get("schedule") or []
+    watcher_trigger = workflow_trigger(watcher) or {}
+    schedule = watcher_trigger.get("schedule") or []
     expected_schedule = {"cron": "17 6 * * *", "timezone": "Asia/Tomsk"}
     if schedule != [expected_schedule]:
         fail(f"debian-watch.yml: expected local schedule {expected_schedule!r}")
-    snapshot_step = step_named(watcher, "refresh", "Commit snapshot")
-    require_run(snapshot_step, "gh workflow run build-release.yml --ref main -f publish=false", "Debian snapshot validation")
-    snapshot_run = str(snapshot_step.get("run", ""))
+    watcher_push = watcher_trigger.get("push") or {}
+    expected_watch_paths = {
+        ".github/workflows/debian-watch.yml",
+        ".github/workflows/ci.yml",
+        ".github/scripts/merge-protected-main.sh",
+    }
+    if watcher_push.get("branches") != ["main"] or set(watcher_push.get("paths") or []) != expected_watch_paths:
+        fail("debian-watch.yml: automation-plumbing push trigger is incomplete")
+
+    snapshot_step = step_named(watcher, "refresh", "Commit snapshot through protected main")
+    require_run(snapshot_step, "merge-protected-main.sh", "protected Debian snapshot merge")
     require_run(snapshot_step, "git add debian-release.sha256 debian-updates-release.sha256 debian-security-release.sha256", "Debian snapshot commit scope")
     require_run(snapshot_step, "config/debian-snapshot.env", "Debian snapshot commit scope")
+    snapshot_run = str(snapshot_step.get("run", ""))
     forbidden_release_mutations = (
         "git add config/release.env",
         "config/debian-snapshot.env config/release.env",
@@ -226,7 +259,26 @@ def validate_workflows() -> None:
     )
     if any(token in snapshot_run for token in forbidden_release_mutations):
         fail("Debian snapshot refresh must not mutate or stage the AtlANTian release version")
+    dispatch_step = step_named(watcher, "refresh", "Dispatch verified release build")
+    require_run(dispatch_step, "gh workflow run build-release.yml --ref main -f publish=false -f origin=debian-watch", "Debian snapshot publication dispatch")
+    require_run(step_named(watcher, "refresh", "Keep schedule active"), "merge-protected-main.sh", "protected watcher heartbeat")
     step_named(watcher, "refresh", "Report Debian major availability")
+
+    if not PROTECTED_MERGE.is_file():
+        fail("protected-main merge helper is missing")
+    protected_merge = PROTECTED_MERGE.read_text(encoding="utf-8")
+    for needle in (
+        "git push origin \"HEAD:refs/heads/$BRANCH\"",
+        "gh workflow run ci.yml",
+        "gh run watch",
+        '"repos/$REPO/pulls/$pr/merge"',
+        "merge_method=squash",
+        '[[ $current_main == "$BASE_SHA" ]]',
+    ):
+        if needle not in protected_merge:
+            fail(f"protected-main helper is missing required contract fragment {needle!r}")
+    if DIRECT_MAIN_PUSH_RE.search(protected_merge):
+        fail("protected-main helper must never push directly to main")
 
     metrics = parsed["image-download-metrics.yml"]
     metric_schedule = workflow_trigger(metrics).get("schedule") or []
@@ -287,7 +339,7 @@ def validate_dependabot() -> None:
 def main() -> None:
     validate_workflows()
     validate_dependabot()
-    print("automation YAML, permissions, API-backed publication, archive portability and Dependabot policy passed")
+    print("automation YAML, protected-main maintenance, API-backed publication, archive portability and Dependabot policy passed")
 
 
 if __name__ == "__main__":
