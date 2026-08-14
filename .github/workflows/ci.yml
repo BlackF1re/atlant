@@ -114,7 +114,7 @@ jobs:
       - name: Validate shell and source contracts
         if: steps.scope.outputs.contracts == 'true'
         run: |
-          shellcheck -S error -x scripts/*.sh
+          shellcheck -S error -x scripts/*.sh .github/scripts/merge-protected-main.sh
           bash scripts/test-build-orchestration.sh
           bash scripts/test-runtime-policy.sh
           bash scripts/test-release-versioning.sh
