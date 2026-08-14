@@ -1,15 +1,15 @@
 # Installing AtlANTian
 
-AtlANTian publishes one versioned, ready-to-flash compressed image:
+AtlANTian publishes one versioned compressed disk image:
 
 ```text
 atlantian-<release>.img.xz
 ```
 
-Decompression yields the exact raw disk image identified in
-`RELEASE-METADATA.json`. The same image is the normal microSD system and the
-matching installer/recovery source for on-board NAND. The physical boot-source
-jumper selects which medium BootROM uses.
+Decompression yields the exact raw image identified in `RELEASE-METADATA.json`.
+The same image is the normal microSD system and the matching installer/recovery
+source for on-board NAND. The physical boot-source jumper selects which medium
+BootROM uses.
 
 ## Install to microSD
 
@@ -20,17 +20,18 @@ jumper selects which medium BootROM uses.
    sha256sum -c SHA256SUMS --ignore-missing
    ```
 
-3. Flash the `.img.xz` directly with Rufus, Raspberry Pi Imager or Etcher. On
-   Linux, use `xz -dc ... | sudo dd ...` as shown in
+3. Write the image with a raw-image flasher such as Rufus, Raspberry Pi Imager or
+   Etcher. If your installed version accepts `.img.xz`, use it directly;
+   otherwise decompress it first and flash the resulting `.img`. On Linux, the
+   compressed image can be streamed directly into the card as shown in
    [SD Quick Start](QUICKSTART.md).
 4. Select physical **SD** boot, insert the card and power the board.
 5. Wait for automatic ext4 ROOT expansion and one reboot.
 6. Log in as `root` and set a password or SSH key before using an untrusted
    network.
 
-The result is a normal writable Debian-compatible system. For exact flashing
-commands, provenance verification and first-boot checks, use
-[SD Quick Start](QUICKSTART.md).
+The result is a normal writable Debian-compatible system. For exact flashing,
+provenance verification and first-boot checks, use [SD Quick Start](QUICKSTART.md).
 
 ## Install the same release to NAND
 
@@ -62,10 +63,10 @@ recovery and controlled factory restore remain separate validation items in the
 
 > [!CAUTION]
 > The verified factory backup is stored on the recovery SD under
-> `/root/atlantian-factory-nand-backup`. Copy it off-card if factory restore
+> `/root/atlantian-factory-nand-backup`. Copy it off-card if factory recovery
 > matters.
 
-NAND geometry, ECC, raw layout, bad blocks and recovery rules are documented only
+NAND geometry, ECC, raw layout, bad blocks and recovery boundaries are documented
 in [NAND](NAND.md).
 
 ## Optional external writable layer

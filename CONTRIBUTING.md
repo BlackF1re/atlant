@@ -11,7 +11,7 @@ bug fixed. Start with the topic index in [docs/README.md](docs/README.md).
 | DT/kernel | preserve boot-critical interfaces and verified pin safety |
 | FPGA profile | document bitstream, DT overlay, pins, voltage and conflicts |
 | persistence/update | preserve documented user/application state; package state must follow the active base |
-| release tooling | fail closed on validation errors while treating pre-existing GitHub release state idempotently |
+| release tooling | fail closed on validation errors while treating same-source GitHub release state idempotently |
 | GitHub Actions | use allow-listed official Actions pinned to immutable 40-hex commits |
 
 Passwordless root on a fresh image is deliberate first-provisioning policy; do not
@@ -19,15 +19,23 @@ silently change it as a generic hardening cleanup.
 
 ## Checks
 
-Run relevant fast checks before pushing:
+Run the relevant fast checks before pushing. The normal CI baseline is:
 
 ```sh
-bash scripts/validate-release-inputs.sh
+python3 .github/scripts/validate-automation.py
+python3 .github/scripts/actions-policy.py scan .github/workflows
+python3 .github/scripts/check-doc-links.py
 bash scripts/test-build-orchestration.sh
+bash scripts/test-runtime-policy.sh
 bash scripts/test-release-versioning.sh
 bash scripts/test-source-contracts.sh
 bash scripts/test-update-leds.sh
-python3 .github/scripts/actions-policy.py scan .github/workflows
+```
+
+Release/download-metric changes should also run:
+
+```sh
+bash scripts/test-release-metrics.sh
 ```
 
 Complete build:
@@ -51,8 +59,8 @@ running `scripts/test-build.sh` against built artifacts.
 A hardware claim should state what proves it: schematic/board evidence for routes,
 boot log + functional test for peripherals, bitstream/DTBO/pin map for FPGA
 profiles, and voltage/conflict analysis plus bench validation for electrical
-safety. Do not promote a route from **Profile** to **Ready** merely because a Zynq
-driver exists.
+safety. Do not promote a route from **Profile**, **Candidate** or **Validation** to
+**Ready** merely because a Zynq driver exists.
 
 ## Repository hygiene
 

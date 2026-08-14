@@ -12,9 +12,13 @@
 
 ## Reporting a vulnerability
 
-Do **not** publish an unpatched vulnerability in a public issue. Use GitHub's
-private security-advisory mechanism and include the affected release, reproduction,
-impact/required access and any known mitigation.
+Do **not** publish an unpatched vulnerability in a public issue or discussion.
+
+If the repository Security page offers GitHub's private **Report a vulnerability**
+form, use it. Otherwise contact the maintainer privately through the contact link
+published on the [BlackF1re GitHub profile](https://github.com/BlackF1re).
+Include the affected release, reproduction, impact/required access and any known
+mitigation. Do not send credentials or unrelated private data.
 
 ## Release trust model
 
@@ -22,14 +26,17 @@ impact/required access and any known mitigation.
 |---|---|
 | immutable Debian Snapshot metadata | reproducible factory package baseline |
 | pinned Linux/U-Boot commits | deterministic upstream source identity |
-| release `SHA256SUMS` | artifact integrity |
+| release `SHA256SUMS` | integrity of the public downloadable payload |
 | version-matched AtlANTian `.deb` set | prevents mixed platform/kernel/release installs |
-| GitHub/Sigstore provenance | ties published artifacts to source/workflow/commit |
+| GitHub build provenance | ties sealed build outputs to source/workflow/commit |
 | release-upgrade gate | blocks invalid package transitions between published releases |
 
-On-device updates verify HTTPS downloads against published `SHA256SUMS`.
-Sigstore provenance is published for release artifacts; it is not currently
-verified locally by the board.
+On-device updates download over HTTPS and verify the selected payload against the
+published `SHA256SUMS`. Build provenance is generated for the sealed outputs that
+enter the publication stage; the board does not currently verify provenance
+locally. Publication-only metadata such as `atlantian-update.json` and the public
+checksum manifest is generated after sealing and is validated by the publication
+contracts rather than treated as a separately attested build output.
 
 ## Initial root access
 
