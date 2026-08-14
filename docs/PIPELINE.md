@@ -43,13 +43,16 @@ A manual dispatch with `publish=true`, and the Debian Watch path, bypass this ba
 threshold when an immediate verified release is needed.
 
 Debian Watch does **not** bypass protected `main`. A changed Snapshot is committed
-on a short-lived `maintenance/debian-snapshot-*` branch, proposed through a pull
-request, explicitly validated by the same `CI / Validate` job on its exact
-base/head SHAs, and squash-merged through GitHub's protected-branch API only if
-validation succeeds and `main` has not moved. The watcher then dispatches
-`Build & Release` against the resulting exact `main` SHA with
-`origin=debian-watch`. Its inactivity heartbeat uses the same protected merge path
-but never dispatches a release build.
+on a short-lived `maintenance/debian-snapshot-*` branch and proposed through a pull
+request. Because `main` requires an up-to-date branch, the watcher asks GitHub for
+the PR's exact synthetic merge candidate, exposes that immutable commit through a
+short-lived `maintenance-validation/*` branch and explicitly runs the same
+`CI / Validate` job on that merge-candidate SHA. It separately pins the original
+base/head pair, rechecks `main`, the PR head and the merge candidate after CI, and
+squash-merges through GitHub's protected-branch API only if all identities are
+unchanged. The watcher then dispatches `Build & Release` against the resulting
+exact `main` SHA with `origin=debian-watch`. Its inactivity heartbeat uses the
+same protected merge path but never dispatches a release build.
 
 A newer run on the same ref cancels an older in-progress release run. Publication
 also requires the built SHA to still be the current `main` tip.

@@ -35,26 +35,30 @@ The watcher:
 5. writes the new Snapshot timestamp/checksums in the runner worktree;
 6. validates the frozen inputs;
 7. creates one short-lived `maintenance/debian-snapshot-*` branch and pull request;
-8. explicitly dispatches the normal `CI / Validate` job for the exact base/head
-   SHAs and waits for success;
-9. verifies that `main` did not move while validation was running, then
-   squash-merges the pull request through GitHub's protected-branch merge API;
+8. asks GitHub for the PR's exact synthetic merge candidate, exposes that immutable
+   commit through a short-lived `maintenance-validation/*` branch, explicitly
+   dispatches the normal `CI / Validate` job on it and waits for success;
+9. verifies that `main`, the original maintenance head and GitHub's merge candidate
+   did not move while validation was running, then squash-merges the pull request
+   through GitHub's protected-branch merge API;
 10. verifies the resulting protected `main` SHA and explicitly dispatches
     `Build & Release` with `origin=debian-watch`;
 11. after the full build/validation gates pass, publishes the next automatic
     AtlANTian version;
 12. separately reports when the immediate next Debian major becomes available.
 
-The PR/Validate/squash path is intentional. `main` requires pull requests and the
-`Validate` status check, so scheduled maintenance never receives a branch-protection
-bypass and never pushes directly to `main`.
+The PR/Validate/squash path is intentional. `main` requires pull requests, an
+up-to-date branch and the `Validate` status check, so scheduled maintenance never
+receives a branch-protection bypass and never pushes directly to `main`.
 
 The explicit CI dispatch is also intentional: events created by the workflow's
-`GITHUB_TOKEN` do not recursively start the normal `pull_request` workflow. The
-watcher therefore dispatches `ci.yml` itself on the exact maintenance head SHA.
-Likewise, after the verified squash merge it explicitly dispatches `Build & Release`
-because a `GITHUB_TOKEN` merge does not recursively trigger the normal push release
-workflow.
+`GITHUB_TOKEN` do not recursively start the normal `pull_request` workflow. With
+strict branch protection the required check belongs to GitHub's synthetic merge
+candidate rather than only to the PR head, so the watcher dispatches `ci.yml` on
+that exact merge-candidate SHA while separately pinning and rechecking the original
+base/head pair. Likewise, after the verified squash merge it explicitly dispatches
+`Build & Release` because a `GITHUB_TOKEN` merge does not recursively trigger the
+normal push release workflow.
 
 ```mermaid
 flowchart LR
@@ -64,15 +68,16 @@ flowchart LR
     D -- no --> C
     D -- yes --> E[freeze + validate Snapshot]
     E --> F[maintenance branch + PR]
-    F --> G[dispatch exact-SHA CI / Validate]
-    G --> H{Validate passed and main unchanged?}
-    H -- no --> C
-    H -- yes --> I[squash merge through protected main]
-    I --> J[dispatch Build & Release]
-    J --> K{all release gates pass?}
-    K -- yes --> L[publish next AtlANTian version]
-    K -- no --> M[no release]
-    N[next Debian major] --> O[report only]
+    F --> G[obtain GitHub merge candidate]
+    G --> H[dispatch CI / Validate on merge candidate]
+    H --> I{Validate passed and base/head/candidate unchanged?}
+    I -- no --> C
+    I -- yes --> J[squash merge through protected main]
+    J --> K[dispatch Build & Release]
+    K --> L{all release gates pass?}
+    L -- yes --> M[publish next AtlANTian version]
+    L -- no --> N[no release]
+    O[next Debian major] --> P[report only]
 ```
 
 If the runner's `debootstrap` package does not yet know the configured codename,
@@ -116,6 +121,6 @@ Snapshot lag and partially published Debian metadata are retried without modifyi
 the configured release generation. If the public repository has no commit for
 45 days, the watcher may create one empty maintenance commit solely to keep
 GitHub's scheduled workflow active. The heartbeat uses the **same** temporary
-maintenance branch → exact-SHA `Validate` → protected squash-merge path as a real
-Snapshot refresh; it never pushes directly to `main`, does not alter release
+maintenance branch → merge-candidate `Validate` → protected squash-merge path as a
+real Snapshot refresh; it never pushes directly to `main`, does not alter release
 inputs and does not dispatch `Build & Release`.
