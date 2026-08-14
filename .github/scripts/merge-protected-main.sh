@@ -83,9 +83,11 @@ gh api --method POST "repos/$REPO/git/refs" \
   -f sha="$MERGE_SHA" >/dev/null
 
 echo "Validating GitHub merge candidate $MERGE_SHA for PR #$pr." >&2
+# Keep stdout reserved for the single merge SHA returned to the caller. gh may
+# print a workflow-dispatch acknowledgement, so route it to the human log.
 gh workflow run ci.yml --repo "$REPO" --ref "$VALIDATION_BRANCH" \
   -f base_sha="$BASE_SHA" \
-  -f head_sha="$MERGE_SHA"
+  -f head_sha="$MERGE_SHA" >&2
 
 run_id=
 for _ in $(seq 1 30); do
@@ -163,4 +165,5 @@ gh api --method DELETE "repos/$REPO/git/refs/heads/$VALIDATION_BRANCH" >/dev/nul
 gh api --method DELETE "repos/$REPO/git/refs/heads/$BRANCH" >/dev/null 2>&1 || true
 rm -f "$merge_json"
 trap - EXIT
+# Machine-readable API for callers: this is the helper's only stdout line.
 printf '%s\n' "$merge_sha"
