@@ -75,6 +75,10 @@ jobs:
           head_sha=$(git rev-parse HEAD)
           branch="maintenance/debian-snapshot-${{ steps.debian.outputs.snapshot }}-${GITHUB_RUN_ID}"
           merge_sha=$(bash .github/scripts/merge-protected-main.sh "$branch" "$title" "$base_sha" "$head_sha")
+          [[ "$merge_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "protected merge helper returned invalid SHA: $merge_sha" >&2
+            exit 1
+          }
           echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
 
       - name: Dispatch verified release build
@@ -95,11 +99,40 @@ jobs:
           # recognizes this origin and bypasses the normal five-commit batch.
           gh workflow run build-release.yml --ref main -f publish=false -f origin=debian-watch
 
+      # Self-heal the narrow failure window between a successful protected
+      # Snapshot merge and the explicit Build & Release dispatch. If the frozen
+      # Snapshot files in current main differ from the latest published tag, the
+      # factory baseline has not yet been represented by a release.
+      - name: Recover undispatched snapshot build
+        id: recovery
+        if: steps.debian.outputs.changed != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo 'dispatched=false' >> "$GITHUB_OUTPUT"
+          latest_tag=$(git tag --list 'v*' --sort=-version:refname | head -n1)
+          [[ -n "$latest_tag" ]] || exit 0
+          if git diff --quiet "$latest_tag" -- \
+            config/debian-snapshot.env \
+            debian-release.sha256 debian-updates-release.sha256 debian-security-release.sha256; then
+            exit 0
+          fi
+
+          main_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          [[ "$main_sha" == "$GITHUB_SHA" ]] || {
+            echo "main moved before snapshot-build recovery: expected $GITHUB_SHA, got $main_sha" >&2
+            exit 1
+          }
+          echo "Current frozen Debian Snapshot differs from $latest_tag; recovering the missing release dispatch."
+          gh workflow run build-release.yml --ref main -f publish=false -f origin=debian-watch
+          echo 'dispatched=true' >> "$GITHUB_OUTPUT"
+
       # GitHub can disable scheduled workflows after prolonged public-repository
       # inactivity. Refresh repository activity only when the source tree itself
       # has been quiet for 45 days; use the same protected-main validation path.
       - name: Keep schedule active
-        if: steps.debian.outputs.changed != 'true'
+        if: steps.debian.outputs.changed != 'true' && steps.recovery.outputs.dispatched != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
