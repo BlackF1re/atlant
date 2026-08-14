@@ -11,7 +11,7 @@ release/version mechanics are documented in [Pipeline](PIPELINE.md).
 | Architecture | configured Debian generation must still publish `armhf` |
 | Factory input | exact Debian Snapshot metadata is frozen |
 | Runtime repositories | installed codename is fixed; moving `stable` is never used |
-| Routine Debian change | refresh the frozen Snapshot, then build/verify/publish a new AtlANTian release |
+| Routine Debian change | refresh the frozen Snapshot, validate it through protected `main`, then build/verify/publish a new AtlANTian release |
 | New Debian major | report availability only; transition remains explicit |
 | Failure | keep the last verified Snapshot and configured generation |
 
@@ -22,22 +22,39 @@ is still recorded separately from the semantic version.
 
 ## Daily watcher
 
-`Debian Base Watch` runs daily at **06:17 Asia/Tomsk**:
+`Debian Base Watch` runs daily at **06:17 Asia/Tomsk**. It also runs once when its
+own protected-maintenance plumbing changes so that CI/branch-protection changes
+are exercised immediately instead of waiting for the next day.
 
-1. read the configured Debian major/codename;
-2. verify `armhf` availability in main, updates and security;
-3. compare live Release metadata with the frozen checksums;
-4. if metadata changed, wait until Debian Snapshot contains those exact bytes;
-5. write the new Snapshot timestamp/checksums;
-6. validate the frozen inputs;
-7. commit only Snapshot state;
-8. explicitly dispatch `Build & Release` with `origin=debian-watch`;
-9. after full build/validation gates pass, publish the next automatic AtlANTian
-   version;
-10. separately report when the immediate next Debian major becomes available.
+The watcher:
 
-The explicit dispatch is required because a workflow push made with
-`GITHUB_TOKEN` does not recursively trigger the normal push release workflow.
+1. reads the configured Debian major/codename;
+2. verifies `armhf` availability in main, updates and security;
+3. compares live Release metadata with the frozen checksums;
+4. if metadata changed, waits until Debian Snapshot contains those exact bytes;
+5. writes the new Snapshot timestamp/checksums in the runner worktree;
+6. validates the frozen inputs;
+7. creates one short-lived `maintenance/debian-snapshot-*` branch and pull request;
+8. explicitly dispatches the normal `CI / Validate` job for the exact base/head
+   SHAs and waits for success;
+9. verifies that `main` did not move while validation was running, then
+   squash-merges the pull request through GitHub's protected-branch merge API;
+10. verifies the resulting protected `main` SHA and explicitly dispatches
+    `Build & Release` with `origin=debian-watch`;
+11. after the full build/validation gates pass, publishes the next automatic
+    AtlANTian version;
+12. separately reports when the immediate next Debian major becomes available.
+
+The PR/Validate/squash path is intentional. `main` requires pull requests and the
+`Validate` status check, so scheduled maintenance never receives a branch-protection
+bypass and never pushes directly to `main`.
+
+The explicit CI dispatch is also intentional: events created by the workflow's
+`GITHUB_TOKEN` do not recursively start the normal `pull_request` workflow. The
+watcher therefore dispatches `ci.yml` itself on the exact maintenance head SHA.
+Likewise, after the verified squash merge it explicitly dispatches `Build & Release`
+because a `GITHUB_TOKEN` merge does not recursively trigger the normal push release
+workflow.
 
 ```mermaid
 flowchart LR
@@ -46,12 +63,16 @@ flowchart LR
     B -- yes --> D{Snapshot caught up?}
     D -- no --> C
     D -- yes --> E[freeze + validate Snapshot]
-    E --> F[commit Snapshot state]
-    F --> G[dispatch Build & Release]
-    G --> H{all release gates pass?}
-    H -- yes --> I[publish next AtlANTian version]
-    H -- no --> J[no release]
-    K[next Debian major] --> L[report only]
+    E --> F[maintenance branch + PR]
+    F --> G[dispatch exact-SHA CI / Validate]
+    G --> H{Validate passed and main unchanged?}
+    H -- no --> C
+    H -- yes --> I[squash merge through protected main]
+    I --> J[dispatch Build & Release]
+    J --> K{all release gates pass?}
+    K -- yes --> L[publish next AtlANTian version]
+    K -- no --> M[no release]
+    N[next Debian major] --> O[report only]
 ```
 
 If the runner's `debootstrap` package does not yet know the configured codename,
@@ -94,5 +115,7 @@ See [Upgrading](UPGRADING.md) for operator steps.
 Snapshot lag and partially published Debian metadata are retried without modifying
 the configured release generation. If the public repository has no commit for
 45 days, the watcher may create one empty maintenance commit solely to keep
-GitHub's scheduled workflow active; it does not alter release inputs and does not
-trigger `Build & Release`.
+GitHub's scheduled workflow active. The heartbeat uses the **same** temporary
+maintenance branch → exact-SHA `Validate` → protected squash-merge path as a real
+Snapshot refresh; it never pushes directly to `main`, does not alter release
+inputs and does not dispatch `Build & Release`.

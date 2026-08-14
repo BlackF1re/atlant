@@ -16,12 +16,22 @@ on:
       - 'SECURITY.md'
       - 'CONTRIBUTING.md'
       - 'docs/**'
+  workflow_dispatch:
+    inputs:
+      base_sha:
+        description: Base commit for explicit protected-branch validation
+        required: true
+        type: string
+      head_sha:
+        description: Head commit for explicit protected-branch validation
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: atlantian-ci-pr-${{ github.event.pull_request.number }}
+  group: atlantian-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -40,10 +50,19 @@ jobs:
       - name: Detect validation scope
         id: scope
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || inputs.base_sha }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.head_sha }}
         run: |
           set -euo pipefail
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid validation base SHA: $BASE_SHA" >&2; exit 64; }
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid validation head SHA: $HEAD_SHA" >&2; exit 64; }
+          git cat-file -e "$BASE_SHA^{commit}"
+          git cat-file -e "$HEAD_SHA^{commit}"
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            [[ "$(git rev-parse HEAD)" == "$HEAD_SHA" ]] || { echo 'workflow_dispatch must validate the checked-out head SHA' >&2; exit 65; }
+            git merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA" || { echo 'validation base must be an ancestor of the dispatched head' >&2; exit 65; }
+          fi
+
           mapfile -t changed < <(git diff --name-only "$BASE_SHA...$HEAD_SHA")
           printf 'Changed files:\n'
           printf '  %s\n' "${changed[@]}"
@@ -53,7 +72,7 @@ jobs:
           release_inputs=false
           for path in "${changed[@]}"; do
             case "$path" in
-              .github/workflows/*|.github/dependabot.yml|.github/scripts/actions-policy.py)
+              .github/workflows/*|.github/dependabot.yml|.github/scripts/actions-policy.py|.github/scripts/validate-automation.py|.github/scripts/merge-protected-main.sh)
                 actions=true
                 ;;
             esac
@@ -95,7 +114,7 @@ jobs:
       - name: Validate shell and source contracts
         if: steps.scope.outputs.contracts == 'true'
         run: |
-          shellcheck -S error -x scripts/*.sh
+          shellcheck -S error -x scripts/*.sh .github/scripts/merge-protected-main.sh
           bash scripts/test-build-orchestration.sh
           bash scripts/test-runtime-policy.sh
           bash scripts/test-release-versioning.sh
@@ -125,6 +144,6 @@ jobs:
         # v7.0.1
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: pr-actions-smoke-${{ github.event.pull_request.number }}-${{ github.run_attempt }}
+          name: validation-actions-smoke-${{ github.run_id }}-${{ github.run_attempt }}
           path: .actions-pr-smoke/payload.txt
           retention-days: 1
