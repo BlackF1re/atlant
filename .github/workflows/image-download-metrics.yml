@@ -3,6 +3,9 @@ name: Download Metrics
 on:
   release:
     types: [published]
+  workflow_run:
+    workflows: [Build & Release]
+    types: [completed]
   schedule:
     - cron: '17 * * * *'
   workflow_dispatch:
@@ -17,8 +20,48 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  gate:
+    name: Decide metrics refresh
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      refresh: ${{ steps.gate.outputs.refresh }}
+    steps:
+      - name: Check release publication
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          refresh=true
+          if [[ "$GITHUB_EVENT_NAME" == workflow_run ]]; then
+            refresh=false
+            if [[ "$WORKFLOW_CONCLUSION" == success && "$WORKFLOW_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              release_id=$(
+                gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+                  --jq ".[] | select(.target_commitish == \"$WORKFLOW_HEAD_SHA\") | .id" \
+                  | head -n1
+              )
+              if [[ -n "$release_id" ]]; then
+                refresh=true
+                echo "Build & Release published release $release_id for $WORKFLOW_HEAD_SHA."
+              else
+                echo "Build & Release completed without publishing $WORKFLOW_HEAD_SHA; metrics refresh is unnecessary."
+              fi
+            else
+              echo "Build & Release did not complete successfully; metrics refresh is unnecessary."
+            fi
+          fi
+          echo "refresh=$refresh" >> "$GITHUB_OUTPUT"
+
   refresh:
     name: Refresh public download totals
+    needs: gate
+    if: needs.gate.outputs.refresh == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
