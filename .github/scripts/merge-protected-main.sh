@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Create a short-lived maintenance PR, validate its exact head SHA through the
-# required CI workflow, then squash-merge it into protected main. This helper is
-# intentionally generic so scheduled maintenance never needs a direct main push.
+# Create a short-lived maintenance PR, validate the exact GitHub-generated
+# merge candidate through the required CI workflow, then squash-merge it into
+# protected main. Scheduled maintenance therefore never needs a direct main push
+# and strict/up-to-date branch protection remains fully enforced.
 set -euo pipefail
 
 usage() {
@@ -15,6 +16,7 @@ TITLE=$2
 BASE_SHA=$3
 HEAD_SHA=$4
 REPO=${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}
+VALIDATION_BRANCH="maintenance-validation/${BRANCH#maintenance/}"
 
 fail() {
   echo "protected main merge: $*" >&2
@@ -22,6 +24,7 @@ fail() {
 }
 
 [[ $BRANCH =~ ^maintenance/[A-Za-z0-9._/-]+$ ]] || fail "unsafe maintenance branch: $BRANCH"
+[[ $VALIDATION_BRANCH =~ ^maintenance-validation/[A-Za-z0-9._/-]+$ ]] || fail "unsafe validation branch: $VALIDATION_BRANCH"
 [[ $BASE_SHA =~ ^[0-9a-f]{40}$ ]] || fail "invalid base SHA: $BASE_SHA"
 [[ $HEAD_SHA =~ ^[0-9a-f]{40}$ ]] || fail "invalid head SHA: $HEAD_SHA"
 [[ $(git rev-parse HEAD) == "$HEAD_SHA" ]] || fail 'HEAD does not match requested maintenance head'
@@ -37,44 +40,74 @@ cleanup() {
   if [[ $merged != true && -n ${pr:-} ]]; then
     gh api --method PATCH "repos/$REPO/pulls/$pr" -f state=closed >/dev/null 2>&1 || true
   fi
+  gh api --method DELETE "repos/$REPO/git/refs/heads/$VALIDATION_BRANCH" >/dev/null 2>&1 || true
   gh api --method DELETE "repos/$REPO/git/refs/heads/$BRANCH" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-# The temporary branch is intentionally outside protected main. The only route
-# into main below is the GitHub pull-request merge API after exact-SHA CI passes.
+# The maintenance branch is intentionally outside protected main. The only
+# route into main below is the GitHub pull-request merge API after CI succeeds
+# on the exact merge candidate that strict branch protection evaluates.
 git push origin "HEAD:refs/heads/$BRANCH" >&2
 
 pr=$(gh api --method POST "repos/$REPO/pulls" \
   -f title="$TITLE" \
   -f head="$BRANCH" \
   -f base=main \
-  -f body='Automated AtlANTian maintenance change. The exact head SHA is explicitly validated before protected-main squash merge.' \
+  -f body='Automated AtlANTian maintenance change. GitHub-generated merge candidate is explicitly validated before protected-main squash merge.' \
   --jq .number)
 echo "Created maintenance PR #$pr for $HEAD_SHA." >&2
 
-# Events produced with GITHUB_TOKEN do not recursively trigger pull_request
-# workflows, so dispatch CI explicitly on the exact PR branch and SHA.
-gh workflow run ci.yml --repo "$REPO" --ref "$BRANCH" \
+# With strict/up-to-date branch protection GitHub requires the required check on
+# the synthetic merge candidate, not only on the PR head. Wait until GitHub has
+# produced that candidate, expose the exact commit temporarily as a branch and
+# dispatch CI on that immutable SHA.
+MERGE_SHA=
+for _ in $(seq 1 30); do
+  meta=$(gh api "repos/$REPO/pulls/$pr")
+  current_head=$(jq -r '.head.sha // empty' <<<"$meta")
+  candidate=$(jq -r '.merge_commit_sha // empty' <<<"$meta")
+  mergeable=$(jq -r '.mergeable // empty' <<<"$meta")
+  [[ $current_head == "$HEAD_SHA" ]] || fail "maintenance PR head moved before validation: expected $HEAD_SHA, got $current_head"
+  if [[ $candidate =~ ^[0-9a-f]{40}$ && $mergeable == true ]]; then
+    MERGE_SHA=$candidate
+    break
+  fi
+  [[ $mergeable != false ]] || fail 'maintenance PR is not mergeable'
+  sleep 2
+done
+[[ $MERGE_SHA =~ ^[0-9a-f]{40}$ ]] || fail 'GitHub did not produce a merge candidate for the maintenance PR'
+
+gh api --method POST "repos/$REPO/git/refs" \
+  -f ref="refs/heads/$VALIDATION_BRANCH" \
+  -f sha="$MERGE_SHA" >/dev/null
+
+echo "Validating GitHub merge candidate $MERGE_SHA for PR #$pr." >&2
+gh workflow run ci.yml --repo "$REPO" --ref "$VALIDATION_BRANCH" \
   -f base_sha="$BASE_SHA" \
-  -f head_sha="$HEAD_SHA"
+  -f head_sha="$MERGE_SHA"
 
 run_id=
 for _ in $(seq 1 30); do
-  run_id=$(gh run list --repo "$REPO" --workflow ci.yml --branch "$BRANCH" \
+  run_id=$(gh run list --repo "$REPO" --workflow ci.yml --branch "$VALIDATION_BRANCH" \
     --event workflow_dispatch --limit 20 \
     --json databaseId,headSha \
-    --jq ".[] | select(.headSha == \"$HEAD_SHA\") | .databaseId" | head -n1)
+    --jq ".[] | select(.headSha == \"$MERGE_SHA\") | .databaseId" | head -n1)
   [[ -n $run_id ]] && break
   sleep 2
 done
-[[ -n $run_id ]] || fail 'explicit Validate workflow run did not appear'
+[[ -n $run_id ]] || fail 'explicit merge-candidate Validate workflow run did not appear'
 
 echo "Waiting for Validate workflow run $run_id." >&2
 gh run watch "$run_id" --repo "$REPO" --exit-status --interval 2 >&2
 
 current_main=$(gh api "repos/$REPO/commits/main" --jq .sha)
 [[ $current_main == "$BASE_SHA" ]] || fail "main moved during validation: expected $BASE_SHA, got $current_main"
+meta=$(gh api "repos/$REPO/pulls/$pr")
+current_head=$(jq -r '.head.sha // empty' <<<"$meta")
+current_merge=$(jq -r '.merge_commit_sha // empty' <<<"$meta")
+[[ $current_head == "$HEAD_SHA" ]] || fail "maintenance PR head moved after validation: expected $HEAD_SHA, got $current_head"
+[[ $current_merge == "$MERGE_SHA" ]] || fail "merge candidate changed after validation: expected $MERGE_SHA, got $current_merge"
 
 merge_json=$(mktemp)
 trap 'rm -f "$merge_json"; cleanup' EXIT
@@ -95,6 +128,7 @@ current_main=$(gh api "repos/$REPO/commits/main" --jq .sha)
 [[ $current_main == "$merge_sha" ]] || fail "protected main tip does not match merge result: $current_main != $merge_sha"
 
 merged=true
+gh api --method DELETE "repos/$REPO/git/refs/heads/$VALIDATION_BRANCH" >/dev/null 2>&1 || true
 gh api --method DELETE "repos/$REPO/git/refs/heads/$BRANCH" >/dev/null 2>&1 || true
 rm -f "$merge_json"
 trap - EXIT
