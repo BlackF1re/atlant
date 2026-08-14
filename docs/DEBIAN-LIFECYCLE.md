@@ -38,14 +38,17 @@ The watcher:
 8. asks GitHub for the PR's exact synthetic merge candidate, exposes that immutable
    commit through a short-lived `maintenance-validation/*` branch, explicitly
    dispatches the normal `CI / Validate` job on it and waits for success;
-9. verifies that `main`, the original maintenance head and GitHub's merge candidate
-   did not move while validation was running, then squash-merges the pull request
-   through GitHub's protected-branch merge API;
-10. verifies the resulting protected `main` SHA and explicitly dispatches
+9. after that real merge-candidate CI succeeds, records the same successful
+   `Validate` result as a commit status linked to the CI run so a PR created by
+   `GITHUB_TOKEN` satisfies the repository's required-status interface;
+10. verifies that `main`, the original maintenance head and GitHub's merge candidate
+    did not move while validation was running, then squash-merges the pull request
+    through GitHub's protected-branch merge API;
+11. verifies the resulting protected `main` SHA and explicitly dispatches
     `Build & Release` with `origin=debian-watch`;
-11. after the full build/validation gates pass, publishes the next automatic
+12. after the full build/validation gates pass, publishes the next automatic
     AtlANTian version;
-12. separately reports when the immediate next Debian major becomes available.
+13. separately reports when the immediate next Debian major becomes available.
 
 The PR/Validate/squash path is intentional. `main` requires pull requests, an
 up-to-date branch and the `Validate` status check, so scheduled maintenance never
@@ -53,10 +56,15 @@ receives a branch-protection bypass and never pushes directly to `main`.
 
 The explicit CI dispatch is also intentional: events created by the workflow's
 `GITHUB_TOKEN` do not recursively start the normal `pull_request` workflow. With
-strict branch protection the required check belongs to GitHub's synthetic merge
-candidate rather than only to the PR head, so the watcher dispatches `ci.yml` on
-that exact merge-candidate SHA while separately pinning and rechecking the original
-base/head pair. Likewise, after the verified squash merge it explicitly dispatches
+strict branch protection the required check is evaluated against GitHub's
+synthetic merge candidate rather than only the PR head. The watcher therefore
+runs `ci.yml` on that exact merge-candidate SHA, pins and rechecks the original
+base/head pair, and only after CI success publishes the status bridge consumed by
+branch protection. The status bridge does not replace validation: it can only be
+written after the real merge-candidate `Validate` run has completed successfully
+and links back to that run.
+
+Likewise, after the verified squash merge the watcher explicitly dispatches
 `Build & Release` because a `GITHUB_TOKEN` merge does not recursively trigger the
 normal push release workflow.
 
@@ -72,12 +80,13 @@ flowchart LR
     G --> H[dispatch CI / Validate on merge candidate]
     H --> I{Validate passed and base/head/candidate unchanged?}
     I -- no --> C
-    I -- yes --> J[squash merge through protected main]
-    J --> K[dispatch Build & Release]
-    K --> L{all release gates pass?}
-    L -- yes --> M[publish next AtlANTian version]
-    L -- no --> N[no release]
-    O[next Debian major] --> P[report only]
+    I -- yes --> J[publish linked Validate status]
+    J --> K[squash merge through protected main]
+    K --> L[dispatch Build & Release]
+    L --> M{all release gates pass?}
+    M -- yes --> N[publish next AtlANTian version]
+    M -- no --> O[no release]
+    P[next Debian major] --> Q[report only]
 ```
 
 If the runner's `debootstrap` package does not yet know the configured codename,
@@ -115,12 +124,22 @@ known-compatible application/user data and reinstall required packages.
 
 See [Upgrading](UPGRADING.md) for operator steps.
 
-## Watcher maintenance
+## Watcher maintenance and recovery
 
 Snapshot lag and partially published Debian metadata are retried without modifying
-the configured release generation. If the public repository has no commit for
-45 days, the watcher may create one empty maintenance commit solely to keep
-GitHub's scheduled workflow active. The heartbeat uses the **same** temporary
-maintenance branch → merge-candidate `Validate` → protected squash-merge path as a
-real Snapshot refresh; it never pushes directly to `main`, does not alter release
-inputs and does not dispatch `Build & Release`.
+the configured release generation.
+
+There is one narrow recoverable failure window after a Snapshot PR has already
+merged but before `Build & Release` was dispatched. On every no-change watcher run,
+AtlANTian compares the four frozen Snapshot input files in current `main` with the
+latest published AtlANTian tag. If they differ, the Snapshot is already committed
+but has not yet been represented by a published factory baseline; the watcher
+therefore re-dispatches `Build & Release` with `origin=debian-watch`. Once a release
+containing those exact Snapshot files exists, this recovery path becomes a no-op.
+
+If the public repository has no commit for 45 days, the watcher may create one
+empty maintenance commit solely to keep GitHub's scheduled workflow active. The
+heartbeat uses the **same** temporary maintenance branch → merge-candidate
+`Validate` → linked status → protected squash-merge path as a real Snapshot
+refresh; it never pushes directly to `main`, does not alter release inputs and
+does not dispatch `Build & Release`.
