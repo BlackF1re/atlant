@@ -387,9 +387,6 @@ jobs:
             echo '| Linux build cache | ${{ steps.kernel_cache.outputs.cache-hit }} |'
             echo '| U-Boot source cache | ${{ steps.uboot_cache.outputs.cache-hit }} |'
             echo '| Root filesystems | ${{ steps.rootfs.outcome }} |'
-            echo '| Linux build cache | ${{ steps.kernel_cache.outputs.cache-hit }} |'
-            echo '| U-Boot source cache | ${{ steps.uboot_cache.outputs.cache-hit }} |'
-            echo '| Root filesystems | ${{ steps.rootfs.outcome }} |'
             echo '| Linux kernel | ${{ steps.kernel.outcome }} |'
             echo '| Release artifacts | ${{ steps.artifacts.outcome }} |'
             echo '| Artifact validation | ${{ steps.artifact_check.outcome }} |'
@@ -636,7 +633,7 @@ jobs:
           image="artifacts/current/$ATLANTIAN_IMAGE_NAME.img"
           test -s "$image"
           expected=$(awk -v name="$ATLANTIAN_IMAGE_NAME.img" '$2 == name || $2 == "*" name { print $1; exit }' artifacts/current/SHA256SUMS)
-          test "$expected" =~ ^[0-9a-f]{64}$
+          [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
           actual=$(sha256sum "$image" | awk '{print $1}')
           test "$actual" = "$expected"
 
