@@ -167,11 +167,20 @@ VERIFIED-SOURCE-SHA
 VERIFIED-VERSION
 ```
 
-and uploads `atlantian-verified-<full-source-SHA>` with a 90-day retention period.
-The sealed artifact contains the raw `.img`, verified `.img.xz`, canonical Debian
-`.deb` filenames and its internal checksum manifest. A failed publication can
-therefore be retried for the same SHA without rebuilding the OS while that
+and uploads `atlantian-verified-<full-source-SHA>` with a 90-day maximum retention
+period. The sealed artifact contains the raw `.img`, verified `.img.xz`, canonical
+Debian `.deb` filenames and its internal checksum manifest. A failed publication
+can therefore be retried for the same SHA without rebuilding the OS while that
 artifact remains available.
+
+Actions storage is bounded independently of that maximum retention. After a
+release is published, `Download Metrics` keeps the newest published release's
+SHA-sealed artifact for the next real upgrade test and removes SHA-sealed artifacts
+belonging to older published releases. Unpublished verified artifacts are retained
+so a failed publication can still be retried without rebuilding. Legacy
+version-named build artifacts, which are no longer consumed by the upgrade gate,
+are also removed. In steady state the repository therefore retains one large
+published build artifact rather than a 90-day history of every release.
 
 ### Publish
 
@@ -260,17 +269,29 @@ release filenames do not have to be embedded directly in Shields JSONPath
 expressions. Release Notes use those keys in the **Downloads** column of each
 `Artifacts` table.
 
-The metric workflow can start from a release event, manually, hourly, or after a
-`Build & Release` run completes. The `workflow_run` path has a cheap gate: it
-refreshes Pages only if that Build & Release succeeded **and** a published Release
-exists for its exact head SHA. Plan-only runs therefore do not cause a Pages
-refresh. Automated releases use this completion path because a release created by
-`GITHUB_TOKEN` does not recursively trigger the normal `release` workflow event.
+The metric workflow can start from a release event, manually, hourly, after a
+`Build & Release` run completes, or when its own workflow definition is changed on
+`main`. The last trigger exists so storage-policy maintenance can take effect
+immediately without starting a system build. The `workflow_run` path has a cheap
+gate: it refreshes Pages only if that Build & Release succeeded **and** a published
+Release exists for its exact head SHA. Plan-only runs therefore do not cause a
+Pages refresh. Automated releases use this completion path because a release
+created by `GITHUB_TOKEN` does not recursively trigger the normal `release`
+workflow event.
 
 On the first applicable refresh after table-format changes, historical release
 descriptions may be normalized idempotently from the actual GitHub asset list.
 Later hourly runs update the Pages JSON without rewriting already-canonical
 release descriptions.
+
+The same workflow has a narrowly scoped `actions: write` pruning job. Cleanup is
+fail-closed: it first proves that the newest published release still has a retained
+`atlantian-verified-<SHA>` artifact. It then deletes only superseded verified
+artifacts tied to already-published releases, duplicate verified artifacts for the
+newest published SHA, and obsolete legacy version-named build artifacts. Verified
+artifacts for unpublished SHAs are deliberately preserved for publication retry.
+Tiny Pages artifacts keep their normal short retention and are not part of this
+cleanup policy.
 
 The update marker is downloaded by a real updater transaction only after user
 confirmation; checks/notes do not fetch it. CI obtains old images from retained
