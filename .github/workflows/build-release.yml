@@ -356,9 +356,8 @@ jobs:
         with:
           name: ${{ needs.plan.outputs.artifact_name }}
           if-no-files-found: error
-          # The release-upgrade gate consumes a previous verified build without
-          # touching public Release assets. Keep enough history for infrequent
-          # release lines while staying within GitHub's normal retention limit.
+          # Keep the complete sealed payload until publication succeeds so a
+          # failed publication can be retried without rebuilding the OS.
           retention-days: 90
           overwrite: true
           path: |
@@ -385,6 +384,9 @@ jobs:
             echo '| Release inputs | ${{ steps.inputs.outcome }} |'
             echo '| Dependencies | ${{ steps.dependencies.outcome }} |'
             echo '| Debian package cache | ${{ steps.debootstrap_cache.outputs.cache-hit }} |'
+            echo '| Linux build cache | ${{ steps.kernel_cache.outputs.cache-hit }} |'
+            echo '| U-Boot source cache | ${{ steps.uboot_cache.outputs.cache-hit }} |'
+            echo '| Root filesystems | ${{ steps.rootfs.outcome }} |'
             echo '| Linux build cache | ${{ steps.kernel_cache.outputs.cache-hit }} |'
             echo '| U-Boot source cache | ${{ steps.uboot_cache.outputs.cache-hit }} |'
             echo '| Root filesystems | ${{ steps.rootfs.outcome }} |'
@@ -531,6 +533,12 @@ jobs:
           test "$decoded_sha" = "$raw_sha"
           (cd artifacts/current && sha256sum -c SHA256SUMS)
 
+      - name: Preserve verified checksum manifest
+        if: steps.publication.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          cp artifacts/current/SHA256SUMS "$RUNNER_TEMP/atlantian-verified-SHA256SUMS"
+
       - name: Generate release notes
         if: steps.publication.outputs.publish == 'true'
         run: bash scripts/generate-release-notes.sh "$RELEASE_TAG" "$GITHUB_SHA"
@@ -618,6 +626,37 @@ jobs:
             exit 1
           fi
 
+      - name: Prepare compact upgrade artifact
+        if: steps.publication.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/atlantian-verified-SHA256SUMS" artifacts/current/SHA256SUMS
+          test "$(cat artifacts/current/VERIFIED-SOURCE-SHA)" = "$GITHUB_SHA"
+          test "$(cat artifacts/current/VERIFIED-VERSION)" = "$ATLANTIAN_VERSION"
+          image="artifacts/current/$ATLANTIAN_IMAGE_NAME.img"
+          test -s "$image"
+          expected=$(awk -v name="$ATLANTIAN_IMAGE_NAME.img" '$2 == name || $2 == "*" name { print $1; exit }' artifacts/current/SHA256SUMS)
+          test "$expected" =~ ^[0-9a-f]{64}$
+          actual=$(sha256sum "$image" | awk '{print $1}')
+          test "$actual" = "$expected"
+
+      - name: Compact published verified artifact
+        id: compact_artifact
+        if: steps.publication.outputs.publish == 'true'
+        # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ needs.plan.outputs.artifact_name }}
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
+          path: |
+            artifacts/current/*.img
+            artifacts/current/RELEASE-METADATA.json
+            artifacts/current/SHA256SUMS
+            artifacts/current/VERIFIED-SOURCE-SHA
+            artifacts/current/VERIFIED-VERSION
+
       - name: Write publication summary
         if: always()
         run: |
@@ -631,4 +670,5 @@ jobs:
             echo '| Reused workflow run | ${{ needs.plan.outputs.reuse_run_id || 'none' }} |'
             echo '| Artifact source run | ${{ steps.artifact_source.outputs.run_id || 'none' }} |'
             echo '| Publication eligible | ${{ steps.publication.outputs.publish }} |'
+            echo '| Compact upgrade artifact | ${{ steps.compact_artifact.outcome || 'skipped' }} |'
           } >> "$GITHUB_STEP_SUMMARY"
