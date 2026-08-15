@@ -6,6 +6,10 @@ on:
   workflow_run:
     workflows: [Build & Release]
     types: [completed]
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/image-download-metrics.yml'
   schedule:
     - cron: '17 * * * *'
   workflow_dispatch:
@@ -151,6 +155,111 @@ jobs:
         id: deployment
         # v4.0.5
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128
+
+  prune:
+    name: Prune retained release builds
+    needs: gate
+    if: needs.gate.outputs.refresh == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Remove superseded build artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          releases="$RUNNER_TEMP/atlantian-releases.json"
+          artifacts="$RUNNER_TEMP/atlantian-actions-artifacts.json"
+          published_shas="$RUNNER_TEMP/atlantian-published-shas.txt"
+
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$releases"
+          latest_sha=$(
+            jq -r '
+              [.[][]
+               | select(.draft == false)
+               | select((.target_commitish // "") | test("^[0-9a-f]{40}$"))]
+              | sort_by(.published_at // .created_at // "")
+              | last
+              | .target_commitish // empty
+            ' "$releases"
+          )
+          [[ "$latest_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo 'No SHA-addressed published release found; refusing artifact cleanup.' >&2
+            exit 1
+          }
+
+          jq -r '
+            .[][]
+            | select(.draft == false)
+            | .target_commitish // empty
+            | select(test("^[0-9a-f]{40}$"))
+          ' "$releases" | sort -u >"$published_shas"
+
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" >"$artifacts"
+          keep_name="atlantian-verified-$latest_sha"
+          keep_id=$(
+            jq -r --arg name "$keep_name" --arg sha "$latest_sha" '
+              [.[] | .artifacts[]?
+               | select(.expired == false and .name == $name and .workflow_run.head_sha == $sha)]
+              | sort_by(.created_at)
+              | last
+              | .id // empty
+            ' "$artifacts"
+          )
+          [[ "$keep_id" =~ ^[0-9]+$ ]] || {
+            echo "Latest release $latest_sha has no retained verified artifact; refusing cleanup." >&2
+            exit 1
+          }
+
+          deleted=0
+          reclaimed=0
+          while IFS=$'\t' read -r artifact_id name size head_sha; do
+            [[ "$artifact_id" =~ ^[0-9]+$ ]] || continue
+            [[ "$size" =~ ^[0-9]+$ ]] || size=0
+            remove=false
+
+            if [[ "$name" =~ ^atlantian-verified-([0-9a-f]{40})$ ]]; then
+              artifact_sha=${BASH_REMATCH[1]}
+              if [[ "$artifact_sha" == "$latest_sha" ]]; then
+                if [[ "$artifact_id" != "$keep_id" ]]; then
+                  remove=true
+                fi
+              elif grep -qxF "$artifact_sha" "$published_shas"; then
+                remove=true
+              else
+                echo "Preserving unpublished retry artifact $name ($artifact_id)."
+              fi
+            elif [[ "$name" =~ ^atlantian-[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]; then
+              # Legacy release artifacts predate SHA-sealed naming and are no
+              # longer consumed by the release-upgrade gate.
+              remove=true
+            fi
+
+            if [[ "$remove" == true ]]; then
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id"
+              deleted=$((deleted + 1))
+              reclaimed=$((reclaimed + size))
+              echo "Deleted superseded Actions artifact $name ($artifact_id, $size bytes)."
+            fi
+          done < <(
+            jq -r '
+              .[] | .artifacts[]?
+              | select(.expired == false)
+              | [.id, .name, (.size_in_bytes // 0), (.workflow_run.head_sha // "")]
+              | @tsv
+            ' "$artifacts"
+          )
+
+          {
+            echo '## AtlANTian Actions storage'
+            echo
+            echo "Retained release artifact: \`$keep_name\` (ID $keep_id)"
+            echo "Deleted artifacts: $deleted"
+            echo "Reclaimed bytes: $reclaimed"
+          } >>"$GITHUB_STEP_SUMMARY"
 
   backfill:
     name: Backfill release artifact tables
