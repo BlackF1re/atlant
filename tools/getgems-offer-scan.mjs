@@ -1,114 +1,103 @@
 import fs from 'node:fs';
 
-const UA = 'BlackF1re-market-scan/1.0';
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0 Safari/537.36';
 
 async function request(url, options = {}) {
-  const r = await fetch(url, {
-    ...options,
-    headers: { 'user-agent': UA, accept: 'application/json', ...(options.headers || {}) },
-  });
-  const text = await r.text();
-  let body;
-  try { body = JSON.parse(text); } catch { body = text; }
-  return { status: r.status, ok: r.ok, body };
-}
-
-async function gql(query, variables = {}) {
-  const endpoints = ['https://getgems.io/graphql/', 'https://api.getgems.io/graphql'];
-  const attempts = [];
-  for (const endpoint of endpoints) {
-    const res = await request(endpoint, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-gg-client': 'v:1 l:en' },
-      body: JSON.stringify({ query, variables }),
+  try {
+    const r = await fetch(url, {
+      redirect: 'follow',
+      ...options,
+      headers: { 'user-agent': UA, accept: '*/*', ...(options.headers || {}) },
     });
-    attempts.push({ endpoint, status: res.status, body: res.body });
-    if (res.ok && res.body?.data) return { endpoint, data: res.body.data, errors: res.body.errors ?? null, attempts };
+    const text = await r.text();
+    let body;
+    try { body = JSON.parse(text); } catch { body = text; }
+    return { url: r.url, status: r.status, ok: r.ok, headers: Object.fromEntries(r.headers), body };
+  } catch (e) {
+    return { url, status: 0, ok: false, error: String(e) };
   }
-  return { endpoint: null, data: null, errors: attempts.at(-1)?.body?.errors ?? null, attempts };
 }
 
-async function mainPageTopGift() {
-  const items = [];
-  let cursor = '0:0';
-  const hash = '324c5f4ed0d134f9ae7af434174cd2655f09b70999d9a265b2f63d17c1e38df4';
-  for (let page = 0; page < 5 && cursor !== null; page++) {
-    const variables = { kind: 'all', count: 100, cursor };
-    const extensions = { persistedQuery: { version: 1, sha256Hash: hash } };
-    const u = new URL('https://getgems.io/graphql/');
-    u.searchParams.set('operationName', 'mainPageTopGift');
-    u.searchParams.set('variables', JSON.stringify(variables));
-    u.searchParams.set('extensions', JSON.stringify(extensions));
-    const r = await request(u, { headers: { 'content-type': 'application/json', 'x-gg-client': 'v:1 l:en' } });
-    if (!r.ok || !r.body?.data?.mainPageTopGift) return { items, error: r };
-    const p = r.body.data.mainPageTopGift;
-    items.push(...(p.items || []));
-    cursor = p.cursor ?? null;
+function scriptUrls(html, base) {
+  if (typeof html !== 'string') return [];
+  const out = [];
+  for (const m of html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)) {
+    try { out.push(new URL(m[1], base).href); } catch {}
   }
-  return { items, cursor };
+  return [...new Set(out)];
+}
+
+function interesting(text) {
+  if (typeof text !== 'string') return [];
+  const hits = new Set();
+  const patterns = [
+    /https?:\\?\/\\?\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+/g,
+    /["'`]\/(?:api|v1|v2|graphql|prices?|floors?|offers?)[A-Za-z0-9_./?=&:%{}-]*["'`]/gi,
+    /.{0,120}(?:getgems|telegram|resale|marketplace|floor|offer).{0,220}/gi,
+  ];
+  for (const p of patterns) {
+    for (const m of text.matchAll(p)) {
+      const s = m[0].replace(/\\u0026/g, '&').replace(/\\\//g, '/');
+      if (s.length < 1000) hits.add(s);
+      if (hits.size > 250) return [...hits];
+    }
+  }
+  return [...hits];
+}
+
+async function inspectSite(url, maxScripts = 40) {
+  const page = await request(url);
+  const scripts = scriptUrls(page.body, page.url || url).slice(0, maxScripts);
+  const inspected = [];
+  for (const src of scripts) {
+    const r = await request(src);
+    const hits = interesting(r.body);
+    if (hits.length) inspected.push({ src, status: r.status, hits });
+  }
+  return { page: { url: page.url, status: page.status, hits: interesting(page.body) }, scripts: inspected };
+}
+
+async function postJson(url, body, headers = {}) {
+  return request(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  });
 }
 
 async function main() {
-  const schemaQuery = `query OfferSchemaProbe {
-    queryType: __type(name: "Query") {
-      fields {
-        name
-        args { name type { kind name ofType { kind name ofType { kind name } } } }
-        type { kind name ofType { kind name ofType { kind name } } }
-      }
-    }
-    nftOffer: __type(name: "NftOffer") {
-      fields { name type { kind name ofType { kind name ofType { kind name } } } }
-    }
-    nftOfferList: __type(name: "NftOfferList") {
-      fields { name type { kind name ofType { kind name ofType { kind name } } } }
-    }
-  }`;
-
-  const schema = await gql(schemaQuery);
-  const offerFields = schema.data?.queryType?.fields?.filter(f => /offer/i.test(f.name)) ?? [];
-  const gifts = await mainPageTopGift();
-  const first = gifts.items?.[0] ?? null;
-  const collection = first?.collection ?? null;
-
-  let restProbe = null;
-  if (collection?.address) {
-    restProbe = await request(`https://api.getgems.io/public-api/v1/offers/collection/${encodeURIComponent(collection.address)}?limit=5`);
-  }
-
-  let giftAssetProbe = null;
-  if (collection?.name) {
-    giftAssetProbe = await request('https://giftasset.gifts/api/v1/gifts/get_collection_offers', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ collection_name: collection.name }),
-    });
-  }
+  const [gaEvil, gaPepe, gaPrices, giftLoot, ggInfo, giftstat, assets] = await Promise.all([
+    postJson('https://giftasset.gifts/api/v1/gifts/get_collection_offers', { collection_name: 'Evil Eye' }),
+    postJson('https://giftasset.gifts/api/v1/gifts/get_collection_offers', { collection_name: 'Plush Pepe' }),
+    request('https://giftasset.gifts/api/v1/gifts/get_gifts_price_list'),
+    inspectSite('https://gift-loot.com/gift/en/xmas-stocking/'),
+    inspectSite('https://getgems.info/'),
+    request('https://api.giftstat.app/current/collections/floor?marketplace=getgems&limit=1000&offset=0'),
+    request('https://raw.githubusercontent.com/ssamy2/TelegramGiftsAssests/main/Gifts_Details.json'),
+  ]);
 
   const result = {
     generated_at: new Date().toISOString(),
-    gql_endpoint: schema.endpoint,
-    gql_errors: schema.errors,
-    offer_query_fields: offerFields,
-    nft_offer_type: schema.data?.nftOffer ?? null,
-    nft_offer_list_type: schema.data?.nftOfferList ?? null,
-    gift_items_count: gifts.items?.length ?? 0,
-    gift_first_item: first,
-    gift_first_collection: collection,
-    gift_page_error: gifts.error ?? null,
-    rest_collection_offer_probe: restProbe,
-    giftasset_collection_offer_probe: giftAssetProbe,
+    giftasset_evil_eye: gaEvil,
+    giftasset_plush_pepe: gaPepe,
+    giftasset_price_list: gaPrices,
+    gift_loot_inspection: giftLoot,
+    getgems_info_inspection: ggInfo,
+    giftstat_getgems: giftstat,
+    telegram_assets: assets,
   };
-
   fs.writeFileSync('market-scan-result.json', JSON.stringify(result, null, 2));
   console.log(JSON.stringify({
     generated_at: result.generated_at,
-    gql_endpoint: result.gql_endpoint,
-    offer_query_fields: offerFields.map(x => x.name),
-    gift_items_count: result.gift_items_count,
-    gift_first_collection: result.gift_first_collection,
-    rest_status: restProbe?.status,
-    giftasset_status: giftAssetProbe?.status,
+    giftasset_evil_eye: { status: gaEvil.status, body: gaEvil.body },
+    giftasset_plush_pepe: { status: gaPepe.status, body: gaPepe.body },
+    giftasset_price_list_status: gaPrices.status,
+    gift_loot_page_status: giftLoot.page.status,
+    gift_loot_script_bundles_with_hits: giftLoot.scripts.length,
+    getgems_info_page_status: ggInfo.page.status,
+    getgems_info_script_bundles_with_hits: ggInfo.scripts.length,
+    giftstat_status: giftstat.status,
+    assets_status: assets.status,
   }, null, 2));
 }
 
