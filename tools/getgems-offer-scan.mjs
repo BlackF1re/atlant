@@ -137,6 +137,11 @@ function variants(name) {
   return v;
 }
 function matchCollection(name, collections) {
+  const manual = {
+    'jack in the box': 'EQA401QqpXtBnwIaDbFjwd5yXfP2mYiCusbJ3Zcw9eXR9CqL',
+  }[normalizeName(name)];
+  if (manual) return collections.find(c => c.address === manual) ?? { address: manual, name: 'Jacks-in-the-Box' };
+
   const gv = variants(name);
   let matches = collections.filter(c => [...variants(c.name)].some(x => gv.has(x)));
   if (matches.length === 1) return matches[0];
