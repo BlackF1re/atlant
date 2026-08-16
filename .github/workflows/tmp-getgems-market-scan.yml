@@ -20,8 +20,8 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install parser dependency
-        run: npm install --no-save @ton/core
+      - name: Install parser dependencies
+        run: npm install --no-save @ton/core @ton/ton @ton/crypto tweetnacl
 
       - name: Scan Getgems offers and floors
         run: node tools/getgems-offer-scan.mjs
