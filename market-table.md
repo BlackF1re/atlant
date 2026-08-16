@@ -1,5 +1,5 @@
 # Telegram gifts market snapshot
-Generated: 2026-08-16T11:41:43.765Z
+Generated: 2026-08-16T11:44:39.672Z
 
 | Gift | Telegram floor | Getgems floor | Highest Getgems offer | Offer/Floor |
 |---|---:|---:|---:|---:|
@@ -12,11 +12,11 @@ Generated: 2026-08-16T11:41:43.765Z
 | Bonded Ring | 38 TON | 38.8 TON | 36.482 TON | 94.0% |
 | Bow Tie | 3.97 TON | 4.699 TON | 4.699 TON | 100.0% |
 | Bunny Muffin | 4.25 TON | 6.9 TON | 6.27901 TON | 91.0% |
-| Candy Cane | 2.9 TON | 3.45 TON | 3.280800094 TON | 95.1% |
+| Candy Cane | 2.9 TON | 3.45 TON | 3.4155 TON | 99.0% |
 | Chill Flame | 2.9 TON | 3.465 TON | 17 TON | 490.6% |
 | Clover Pin | 4.09 TON | 4.88 TON | 4.62 TON | 94.7% |
 | Cookie Heart | 3.93 TON | 4.6 TON | 4.41601 TON | 96.0% |
-| Crystal Ball | 10.89 TON | 11.949 TON | 10.68672 TON | 89.4% |
+| Crystal Ball | 10.89 TON | 11.949 TON | 10.99308 TON | 92.0% |
 | Cupid Charm | 19.8 TON | 22 TON | 20.9 TON | 95.0% |
 | Desk Calendar | 3.622641509 TON | 4.75 TON | 10.29 TON | 216.6% |
 | Diamond Ring | 25 TON | 28.9 TON | 28.949 TON | 100.2% |
@@ -47,7 +47,7 @@ Generated: 2026-08-16T11:41:43.765Z
 | Instant Ramen | 2.99 TON | 3.469 TON | 3.4 TON | 98.0% |
 | Ion Gem | 54.7 TON | 69 TON | 47.2757 TON | 68.5% |
 | Ionic Dryer | 12 TON | 15.99 TON | 13.76004 TON | 86.1% |
-| Jack-in-the-Box | 3.67 TON | 4.189999999 TON | — | — |
+| Jack-in-the-Box | 3.67 TON | 4.189999999 TON | 3.65 TON | 87.1% |
 | Jelly Bunny | 4 TON | 7.94 TON | 7.54301 TON | 95.0% |
 | Jester Hat | 3 TON | 3.689 TON | 3.1888312 TON | 86.4% |
 | Jingle Bells | 5 TON | 7.98 TON | 7.4214 TON | 93.0% |
@@ -67,7 +67,7 @@ Generated: 2026-08-16T11:41:43.765Z
 | Mad Pumpkin | 9.49 TON | 10.79 TON | 10.2505 TON | 95.0% |
 | Magic Potion | 49 TON | 60 TON | 54 TON | 90.0% |
 | Mighty Arm | 103 TON | 118 TON | 82.0585 TON | 69.5% |
-| Mini Oscar | 52 TON | 77 TON | 50.579 TON | 65.7% |
+| Mini Oscar | 52 TON | 77 TON | 50.699 TON | 65.8% |
 | Money Pot | 3.98 TON | 4.25 TON | 4.2 TON | 98.8% |
 | Mood Pack | 3.55 TON | 3.98 TON | 3.781 TON | 95.0% |
 | Moon Pendant | 5.28 TON | 5.99 TON | 5.7504 TON | 96.0% |
@@ -75,9 +75,9 @@ Generated: 2026-08-16T11:41:43.765Z
 | Nail Bracelet | 80 TON | 125 TON | 81.7505 TON | 65.4% |
 | Neko Helmet | 29.5 TON | 36.99 TON | 36.99 TON | 100.0% |
 | Party Sparkler | 3.4 TON | 4.29 TON | 3.95104 TON | 92.1% |
-| Perfume Bottle | 55 TON | 68.854040405 TON | 46.0718 TON | 66.9% |
+| Perfume Bottle | 55 TON | 68.854040405 TON | 47.0318 TON | 68.3% |
 | Pet Snake | 2.97 TON | 3.65 TON | 3.4675 TON | 95.0% |
-| Plush Pepe | 4800 TON | 5699 TON | 5250 TON | 92.1% |
+| Plush Pepe | 4800 TON | 5699 TON | 5271.575 TON | 92.5% |
 | Pool Float | 3.15 TON | 3.429999999 TON | 3.51 TON | 102.3% |
 | Precious Peach | 242.69 TON | 275 TON | 250.25 TON | 91.0% |
 | Pretty Posy | 4.38 TON | 4.93 TON | 4.931 TON | 100.0% |
@@ -89,7 +89,7 @@ Generated: 2026-08-16T11:41:43.765Z
 | Scared Cat | 150 TON | 209 TON | 408.5 TON | 195.5% |
 | Sharp Tongue | 31 TON | 39.8 TON | 37.43 TON | 94.0% |
 | Signet Ring | 30.33 TON | 32.999999999 TON | 33 TON | 100.0% |
-| Skull Flower | 8.6 TON | 9.98 TON | 9.008069999 TON | 90.3% |
+| Skull Flower | 8.6 TON | 9.98 TON | 9.248069999 TON | 92.7% |
 | Sky Stilettos | 16.5 TON | 18.8 TON | 18.048 TON | 96.0% |
 | Sleigh Bell | 5.6 TON | 5.8 TON | 5.68401 TON | 98.0% |
 | Snake Box | 2.87 TON | 3.4 TON | 3.25 TON | 95.6% |
@@ -97,7 +97,7 @@ Generated: 2026-08-16T11:41:43.765Z
 | Snoop Dogg | 4.64 TON | 4.94 TON | 7.5 TON | 151.8% |
 | Snow Globe | 3.74 TON | 4.25 TON | 4.11 TON | 96.7% |
 | Snow Mittens | 3.3 TON | 4.47 TON | 4.023 TON | 90.0% |
-| Spiced Wine | 3.989999999 TON | 4.45 TON | 3.8448208 TON | 86.4% |
+| Spiced Wine | 3.989999999 TON | 4.45 TON | 4.152406464 TON | 93.3% |
 | Spring Basket | 4.75 TON | 5.55 TON | 14.5782 TON | 262.7% |
 | Spy Agaric | 4.37 TON | 4.85999 TON | 4.6169905 TON | 95.0% |
 | Star Notepad | 3.48 TON | 3.999999 TON | 3.54827392 TON | 88.7% |
@@ -120,4 +120,4 @@ Generated: 2026-08-16T11:41:43.765Z
 | Whip Cupcake | 2.92 TON | 3.6 TON | 3.6504216 TON | 101.4% |
 | Winter Wreath | 2.97 TON | 3.57 TON | 3.07 TON | 86.0% |
 | Witch Hat | 4.05 TON | 4.48 TON | 7.038 TON | 157.1% |
-| Xmas Stocking | 2.84 TON | 3.44 TON | 3.1644208 TON | 92.0% |
+| Xmas Stocking | 2.84 TON | 3.44 TON | 3.417574464 TON | 99.3% |
