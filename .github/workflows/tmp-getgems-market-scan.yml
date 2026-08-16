@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - tmp/getgems-market-scan-20260816
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -20,5 +21,12 @@ jobs:
           node-version: '22'
       - name: Install parser dependencies
         run: npm install --no-save @ton/core @ton/ton @ton/crypto tweetnacl
-      - name: Probe Getgems AI token transport
-        run: node tools/getgems-auth-probe.mjs
+      - name: Scan Telegram and Getgems markets
+        run: node tools/getgems-offer-scan.mjs
+      - name: Commit current snapshot
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add market-scan-result.json market-table.csv market-table.md
+          git commit -m 'chore: update Telegram gifts market snapshot' || exit 0
+          git push origin HEAD:${GITHUB_REF_NAME}
