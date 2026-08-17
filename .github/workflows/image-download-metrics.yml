@@ -45,16 +45,27 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == workflow_run ]]; then
             refresh=false
             if [[ "$WORKFLOW_CONCLUSION" == success && "$WORKFLOW_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-              release_id=$(
-                gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-                  --jq ".[] | select(.target_commitish == \"$WORKFLOW_HEAD_SHA\") | .id" \
-                  | head -n1
-              )
-              if [[ -n "$release_id" ]]; then
-                refresh=true
-                echo "Build & Release published release $release_id for $WORKFLOW_HEAD_SHA."
-              else
-                echo "Build & Release completed without publishing $WORKFLOW_HEAD_SHA; metrics refresh is unnecessary."
+              releases="$RUNNER_TEMP/atlantian-gate-releases.json"
+              for attempt in 1 2 3 4; do
+                if gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$releases" \
+                  && jq -e 'type == "array" and length > 0 and all(.[]; type == "array")' "$releases" >/dev/null; then
+                  release_id=$(
+                    jq -r --arg sha "$WORKFLOW_HEAD_SHA" \
+                      '[.[][] | select(.draft == false and .published_at != null and .target_commitish == $sha)] | first | .id // empty' \
+                      "$releases"
+                  )
+                  if [[ "$release_id" =~ ^[0-9]+$ ]]; then
+                    refresh=true
+                    echo "Build & Release published release $release_id for $WORKFLOW_HEAD_SHA."
+                    break
+                  fi
+                fi
+                if [[ "$attempt" -lt 4 ]]; then
+                  sleep $((attempt * 2))
+                fi
+              done
+              if [[ "$refresh" != true ]]; then
+                echo "No published release was found for successful Build & Release head $WORKFLOW_HEAD_SHA; treating it as plan-only/no-publication."
               fi
             else
               echo "Build & Release did not complete successfully; metrics refresh is unnecessary."
@@ -81,65 +92,210 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          releases="$RUNNER_TEMP/atlantian-releases.json"
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$releases"
-          image_downloads=$(jq '[.[][] | .assets[] | select(.name | test("^atlantian-[^/]+\\.img\\.xz$")) | .download_count] | add // 0' "$releases")
-          system_updates=$(jq '[.[][] | .assets[] | select(.name == "atlantian-update.json") | .download_count] | add // 0' "$releases")
-          printf 'image_downloads=%s\n' "$image_downloads" >>"$GITHUB_OUTPUT"
-          printf 'system_updates=%s\n' "$system_updates" >>"$GITHUB_OUTPUT"
+          raw="$RUNNER_TEMP/atlantian-releases.raw.json"
+          releases="$RUNNER_TEMP/atlantian-release-metrics-snapshot.json"
+          valid=false
+
+          for attempt in 1 2 3 4 5; do
+            rm -f "$raw" "$releases"
+            if gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$raw"; then
+              if python3 - "$raw" "$releases" <<'PY'
+          import json
+          import re
+          import sys
+          from datetime import datetime, timezone
+
+          raw_path, snapshot_path = sys.argv[1:]
+          sha_re = re.compile(r"^[0-9a-f]{40}$")
+          image_re = re.compile(r"^atlantian-[^/]+\.img(?:\.xz)?$")
+
+          with open(raw_path, encoding="utf-8") as stream:
+              pages = json.load(stream)
+          if not isinstance(pages, list) or not pages or not all(isinstance(page, list) for page in pages):
+              raise SystemExit("release API response is not a non-empty paginated list")
+
+          raw_releases = [release for page in pages for release in page]
+          releases = [
+              release for release in raw_releases
+              if release.get("draft") is False and release.get("published_at")
+          ]
+          if not releases:
+              raise SystemExit("release API returned no published releases")
+
+          normalized = []
+          seen_ids = set()
+          seen_tags = set()
+          for release in releases:
+              release_id = release.get("id")
+              tag = release.get("tag_name")
+              target = release.get("target_commitish") or ""
+              assets = release.get("assets")
+              if not isinstance(release_id, int) or release_id <= 0:
+                  raise SystemExit("published release has an invalid id")
+              if not isinstance(tag, str) or not tag or tag in seen_tags:
+                  raise SystemExit("published release has an invalid or duplicate tag")
+              if release_id in seen_ids:
+                  raise SystemExit("published release id is duplicated")
+              if not isinstance(assets, list):
+                  raise SystemExit(f"release {tag} has no complete asset list")
+              seen_ids.add(release_id)
+              seen_tags.add(tag)
+
+              normalized_assets = []
+              seen_names = set()
+              for asset in assets:
+                  name = asset.get("name")
+                  size = asset.get("size")
+                  count = asset.get("download_count")
+                  asset_id = asset.get("id")
+                  if not isinstance(asset_id, int) or asset_id <= 0:
+                      raise SystemExit(f"release {tag} contains an asset with invalid id")
+                  if not isinstance(name, str) or not name or name in seen_names:
+                      raise SystemExit(f"release {tag} contains an invalid or duplicate asset name")
+                  if not isinstance(size, int) or size < 0:
+                      raise SystemExit(f"release {tag} asset {name} has invalid size")
+                  if not isinstance(count, int) or count < 0:
+                      raise SystemExit(f"release {tag} asset {name} has invalid download_count")
+                  seen_names.add(name)
+                  normalized_assets.append({
+                      "id": asset_id,
+                      "name": name,
+                      "size": size,
+                      "download_count": count,
+                  })
+
+              normalized.append({
+                  "id": release_id,
+                  "tag_name": tag,
+                  "target_commitish": target,
+                  "created_at": release.get("created_at"),
+                  "published_at": release.get("published_at"),
+                  "body": release.get("body") or "",
+                  "assets": normalized_assets,
+              })
+
+          latest = max(normalized, key=lambda release: release.get("published_at") or release.get("created_at") or "")
+          latest_names = {asset["name"] for asset in latest["assets"]}
+          if not sha_re.fullmatch(latest["target_commitish"]):
+              raise SystemExit("newest published release is not pinned to a full source SHA")
+          if not any(image_re.fullmatch(name) for name in latest_names):
+              raise SystemExit("newest published release has no versioned SD image asset")
+          if "SHA256SUMS" not in latest_names:
+              raise SystemExit("newest published release has no SHA256SUMS asset")
+
+          snapshot = {
+              "schemaVersion": 1,
+              "fetchedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+              "releases": normalized,
+          }
+          with open(snapshot_path, "w", encoding="utf-8") as stream:
+              json.dump(snapshot, stream, ensure_ascii=False, separators=(",", ":"))
+              stream.write("\n")
+          PY
+              then
+                valid=true
+                break
+              fi
+            fi
+            echo "Release inventory attempt $attempt was incomplete; retrying without publishing metrics." >&2
+            if [[ "$attempt" -lt 5 ]]; then
+              sleep $((attempt * 3))
+            fi
+          done
+
+          if [[ "$valid" != true || ! -s "$releases" ]]; then
+            echo 'Could not obtain a complete, validated GitHub Releases inventory; preserving the previous Pages deployment.' >&2
+            exit 1
+          fi
+
+          image_downloads=$(jq '[.releases[] | .assets[] | select(.name | (test("^atlantian-[^/]+\\.img\\.xz$") or test("^atlantian-[^/]+\\.img$"))) | .download_count] | add // 0' "$releases")
+          system_updates=$(jq '[.releases[] | .assets[] | select(.name == "atlantian-update.json") | .download_count] | add // 0' "$releases")
+          asset_count=$(jq '[.releases[] | .assets[]] | length' "$releases")
+          release_count=$(jq '.releases | length' "$releases")
+          [[ "$image_downloads" =~ ^[0-9]+$ ]]
+          [[ "$system_updates" =~ ^[0-9]+$ ]]
+          [[ "$asset_count" =~ ^[1-9][0-9]*$ ]]
+          [[ "$release_count" =~ ^[1-9][0-9]*$ ]]
+          {
+            echo "image_downloads=$image_downloads"
+            echo "system_updates=$system_updates"
+            echo "asset_count=$asset_count"
+            echo "release_count=$release_count"
+          } >>"$GITHUB_OUTPUT"
 
       - name: Create Pages payload
         env:
           IMAGE_DOWNLOADS: ${{ steps.metric.outputs.image_downloads }}
           SYSTEM_UPDATES: ${{ steps.metric.outputs.system_updates }}
+          ASSET_COUNT: ${{ steps.metric.outputs.asset_count }}
+          RELEASE_COUNT: ${{ steps.metric.outputs.release_count }}
         run: |
           set -euo pipefail
-          releases="$RUNNER_TEMP/atlantian-releases.json"
+          releases="$RUNNER_TEMP/atlantian-release-metrics-snapshot.json"
           mkdir -p site
-          python3 - "$releases" "$IMAGE_DOWNLOADS" "$SYSTEM_UPDATES" >site/image-downloads.json <<'PY'
+          python3 - "$releases" "$IMAGE_DOWNLOADS" "$SYSTEM_UPDATES" "$ASSET_COUNT" "$RELEASE_COUNT" >site/image-downloads.json <<'PY'
           import hashlib
           import json
           import sys
           from datetime import datetime, timezone
 
-          with open(sys.argv[1], encoding="utf-8") as stream:
-              pages = json.load(stream)
-          image_downloads = int(sys.argv[2])
-          system_updates = int(sys.argv[3])
-          releases = [release for page in pages for release in page]
+          snapshot_path, image_arg, updates_arg, asset_arg, release_arg = sys.argv[1:]
+          with open(snapshot_path, encoding="utf-8") as stream:
+              snapshot = json.load(stream)
+          releases = snapshot.get("releases")
+          if not isinstance(releases, list) or len(releases) != int(release_arg):
+              raise SystemExit("validated release snapshot changed before Pages payload generation")
+
+          image_downloads = int(image_arg)
+          system_updates = int(updates_arg)
           asset_downloads = {}
           asset_index = {}
 
           for release in releases:
-              tag = release.get("tag_name") or ""
-              if not tag:
-                  continue
+              tag = release["tag_name"]
               indexed_assets = {}
-              for asset in release.get("assets", []):
-                  name = asset.get("name") or ""
-                  if not name:
-                      continue
+              for asset in release["assets"]:
+                  name = asset["name"]
                   key = "a" + hashlib.sha256(f"{tag}\n{name}".encode()).hexdigest()
-                  asset_downloads[key] = int(asset.get("download_count") or 0)
+                  asset_downloads[key] = asset["download_count"]
                   indexed_assets[name] = key
               asset_index[tag] = indexed_assets
 
+          if len(asset_downloads) != int(asset_arg) or not asset_downloads:
+              raise SystemExit("refusing to publish an empty or incomplete per-asset metric map")
+
           payload = {
-              "schemaVersion": 2,
+              "schemaVersion": 3,
               "imageDownloads": image_downloads,
               "systemUpdates": system_updates,
               "assetDownloads": dict(sorted(asset_downloads.items())),
               "assetIndex": {tag: dict(sorted(assets.items())) for tag, assets in sorted(asset_index.items())},
               "updatedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
               "scopes": {
-                  "imageDownloads": "atlantian-<release>.img.xz assets across all GitHub Releases",
-                  "systemUpdates": "atlantian-update.json assets across all GitHub Releases",
+                  "imageDownloads": "versioned AtlANTian .img and .img.xz assets across published GitHub Releases",
+                  "systemUpdates": "atlantian-update.json assets across published GitHub Releases; zero is valid when no real updater transaction has started",
                   "assetDownloads": "per-release GitHub asset download_count keyed by SHA-256(tag + newline + asset name)",
               },
           }
           json.dump(payload, sys.stdout, indent=2, sort_keys=True)
           sys.stdout.write("\n")
           PY
+          jq -e \
+            --argjson images "$IMAGE_DOWNLOADS" \
+            --argjson updates "$SYSTEM_UPDATES" \
+            --argjson assets "$ASSET_COUNT" \
+            '.schemaVersion == 3 and .imageDownloads == $images and .systemUpdates == $updates and (.assetDownloads | length) == $assets' \
+            site/image-downloads.json >/dev/null
+
+      - name: Upload validated release snapshot
+        # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: atlantian-release-metrics-snapshot
+          path: ${{ runner.temp }}/atlantian-release-metrics-snapshot.json
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
 
       - name: Configure Pages
         # v5.0.0
@@ -158,47 +314,65 @@ jobs:
 
   prune:
     name: Prune retained release builds
-    needs: gate
-    if: needs.gate.outputs.refresh == 'true'
+    needs: refresh
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       actions: write
       contents: read
     steps:
+      - name: Download validated release snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release-metrics"
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name atlantian-release-metrics-snapshot --dir "$RUNNER_TEMP/release-metrics"
+          test -s "$RUNNER_TEMP/release-metrics/atlantian-release-metrics-snapshot.json"
+
       - name: Remove superseded build artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          releases="$RUNNER_TEMP/atlantian-releases.json"
+          releases="$RUNNER_TEMP/release-metrics/atlantian-release-metrics-snapshot.json"
           artifacts="$RUNNER_TEMP/atlantian-actions-artifacts.json"
           published_shas="$RUNNER_TEMP/atlantian-published-shas.txt"
 
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$releases"
           latest_sha=$(
             jq -r '
-              [.[][]
-               | select(.draft == false)
-               | select((.target_commitish // "") | test("^[0-9a-f]{40}$"))]
+              [.releases[] | select((.target_commitish // "") | test("^[0-9a-f]{40}$"))]
               | sort_by(.published_at // .created_at // "")
               | last
               | .target_commitish // empty
             ' "$releases"
           )
           [[ "$latest_sha" =~ ^[0-9a-f]{40}$ ]] || {
-            echo 'No SHA-addressed published release found; refusing artifact cleanup.' >&2
+            echo 'Validated release snapshot has no SHA-addressed published release; refusing artifact cleanup.' >&2
             exit 1
           }
 
           jq -r '
-            .[][]
-            | select(.draft == false)
+            .releases[]
             | .target_commitish // empty
             | select(test("^[0-9a-f]{40}$"))
           ' "$releases" | sort -u >"$published_shas"
 
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" >"$artifacts"
+          valid_artifacts=false
+          for attempt in 1 2 3 4; do
+            if gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" >"$artifacts" \
+              && jq -e 'type == "array" and length > 0 and all(.[]; has("artifacts"))' "$artifacts" >/dev/null; then
+              valid_artifacts=true
+              break
+            fi
+            if [[ "$attempt" -lt 4 ]]; then sleep $((attempt * 2)); fi
+          done
+          [[ "$valid_artifacts" == true ]] || {
+            echo 'Could not obtain a validated Actions artifact inventory; refusing cleanup.' >&2
+            exit 1
+          }
+
           keep_name="atlantian-verified-$latest_sha"
           keep_id=$(
             jq -r --arg name "$keep_name" --arg sha "$latest_sha" '
@@ -233,8 +407,6 @@ jobs:
                 echo "Preserving unpublished retry artifact $name ($artifact_id)."
               fi
             elif [[ "$name" =~ ^atlantian-[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]; then
-              # Legacy release artifacts predate SHA-sealed naming and are no
-              # longer consumed by the release-upgrade gate.
               remove=true
             fi
 
@@ -267,19 +439,29 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
+      actions: read
       contents: write
     steps:
+      - name: Download validated release snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release-metrics"
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name atlantian-release-metrics-snapshot --dir "$RUNNER_TEMP/release-metrics"
+          test -s "$RUNNER_TEMP/release-metrics/atlantian-release-metrics-snapshot.json"
+
       - name: Backfill artifact download columns
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          releases="$RUNNER_TEMP/atlantian-releases.json"
+          releases="$RUNNER_TEMP/release-metrics/atlantian-release-metrics-snapshot.json"
           patches="$RUNNER_TEMP/release-note-patches"
           owner=${GITHUB_REPOSITORY%%/*}
           repo=${GITHUB_REPOSITORY#*/}
           metrics_url="https://${owner,,}.github.io/${repo}/image-downloads.json"
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$releases"
           rm -rf "$patches"
           mkdir -p "$patches"
 
@@ -294,8 +476,10 @@ jobs:
           releases_path, patches_path, metrics_url = sys.argv[1:]
           patches = pathlib.Path(patches_path)
           with open(releases_path, encoding="utf-8") as stream:
-              pages = json.load(stream)
-          releases = [release for page in pages for release in page]
+              snapshot = json.load(stream)
+          releases = snapshot.get("releases")
+          if not isinstance(releases, list) or not releases:
+              raise SystemExit("validated release snapshot is empty")
 
           def fmt_bytes(value):
               value = int(value)
