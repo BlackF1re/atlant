@@ -259,8 +259,10 @@ The SD filesystem is not copied wholesale into NAND.
 `Download Metrics` deploys one small `image-downloads.json` to GitHub Pages. It
 contains:
 
-- cumulative image downloads: sum of GitHub `download_count` for
-  `atlantian-<release>.img.xz`;
+- cumulative image downloads: sum of GitHub `download_count` for every published
+  AtlANTian SD image asset, including current versioned
+  `atlantian-<release>.img.xz`, historical `atlantian-<release>.img`, and the
+  one legacy unversioned `atlantian.img` asset;
 - cumulative system-update starts: sum for `atlantian-update.json`;
 - a keyed per-asset `download_count` for every file in every release.
 
