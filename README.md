@@ -124,16 +124,17 @@ For a prerelease `X.Y.Z-alpha.N`, Debian package metadata uses
 The updater verifies Package, Version, Architecture and the published checksum;
 it does not infer package identity from the filename alone.
 
-**Image Downloads** is the cumulative GitHub `download_count` for only
-`atlantian-<release>.img.xz` assets. **System Updates** is the corresponding sum
-for the tiny `atlantian-update.json` marker fetched once when a real update
-transaction starts. The Pages-backed totals refresh after publication and hourly;
-a completed `Build & Release` refreshes them only when that workflow actually
-published a release. No AtlANTian installation or device identifier is added to
-these requests. The badges are aggregate download-event counters, not unique
-user/device counters, and GitHub/Shields caching can delay the displayed value.
-CI validation uses private Actions artifacts and does not download either public
-metric asset.
+**Image Downloads** is the cumulative GitHub `download_count` for every published
+AtlANTian SD image asset: current versioned `atlantian-<release>.img.xz` files plus
+historical raw `.img` names such as `atlantian-<release>.img` and the legacy
+`atlantian.img`. **System Updates** is the corresponding sum for the tiny
+`atlantian-update.json` marker fetched once when a real update transaction starts.
+The Pages-backed totals refresh after publication and hourly; a completed
+`Build & Release` refreshes them only when that workflow actually published a
+release. No AtlANTian installation or device identifier is added to these
+requests. The badges are aggregate download-event counters, not unique user/device
+counters, and GitHub/Shields caching can delay the displayed value. CI validation
+uses private Actions artifacts and does not download either public metric asset.
 
 The full user-facing update contract lives in [Upgrading](docs/UPGRADING.md).
 

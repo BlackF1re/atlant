@@ -208,7 +208,7 @@ jobs:
             exit 1
           fi
 
-          image_downloads=$(jq '[.releases[] | .assets[] | select(.name | (test("^atlantian-[^/]+\\.img\\.xz$") or test("^atlantian-[^/]+\\.img$"))) | .download_count] | add // 0' "$releases")
+          image_downloads=$(jq '[.releases[] | .assets[] | select(.name | (test("^atlantian-[^/]+\\.img\\.xz$") or test("^atlantian-[^/]+\\.img$") or . == "atlantian.img")) | .download_count] | add // 0' "$releases")
           system_updates=$(jq '[.releases[] | .assets[] | select(.name == "atlantian-update.json") | .download_count] | add // 0' "$releases")
           asset_count=$(jq '[.releases[] | .assets[]] | length' "$releases")
           release_count=$(jq '.releases | length' "$releases")
@@ -272,7 +272,7 @@ jobs:
               "assetIndex": {tag: dict(sorted(assets.items())) for tag, assets in sorted(asset_index.items())},
               "updatedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
               "scopes": {
-                  "imageDownloads": "versioned AtlANTian .img and .img.xz assets across published GitHub Releases",
+                  "imageDownloads": "AtlANTian SD image assets across published GitHub Releases, including historical raw .img names and current versioned .img.xz assets",
                   "systemUpdates": "atlantian-update.json assets across published GitHub Releases; zero is valid when no real updater transaction has started",
                   "assetDownloads": "per-release GitHub asset download_count keyed by SHA-256(tag + newline + asset name)",
               },
