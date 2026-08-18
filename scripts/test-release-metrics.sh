@@ -115,9 +115,15 @@ require 'workflow_run:' "$metrics"
 require 'workflows: [Build & Release]' "$metrics"
 require 'types: [completed]' "$metrics"
 require 'Decide metrics refresh' "$metrics"
-require 'select(.target_commitish == \"$WORKFLOW_HEAD_SHA\")' "$metrics"
+# workflow_run refreshes must be tied to the exact release source SHA. Check the
+# data flow rather than a single jq spelling so harmless implementation changes
+# do not invalidate the contract while SHA matching remains mandatory.
+require 'WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}' "$metrics"
+require '--arg sha "$WORKFLOW_HEAD_SHA"' "$metrics"
+require '.target_commitish == $sha' "$metrics"
 require 'needs.gate.outputs.refresh == '"'"'true'"'"'' "$metrics"
-require '"schemaVersion": 2' "$metrics"
+require '"schemaVersion": 3' "$metrics"
+require '.schemaVersion == 3' "$metrics"
 require '"assetDownloads"' "$metrics"
 require '"assetIndex"' "$metrics"
 require 'hashlib.sha256(f"{tag}\n{name}".encode()).hexdigest()' "$metrics"
