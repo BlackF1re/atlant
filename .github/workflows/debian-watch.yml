@@ -150,8 +150,20 @@ jobs:
           git commit -m "$title"
 
           release_input_commits=$(bash scripts/release-batch-state.sh HEAD)
+          latest_tag=$(git tag --list 'v*' --sort=-version:refname | head -n1)
+          unreleased_boot_delta=$BOOT_CHANGED
+          if [[ -z "$latest_tag" ]]; then
+            # A repository without a published release must not defer its first
+            # accepted boot stack behind the ordinary Debian batch threshold.
+            unreleased_boot_delta=true
+          elif ! git diff --quiet "$latest_tag" -- config/release.env config/u-boot.env; then
+            # Boot-input urgency is relative to the last published binary state,
+            # not merely to what happened to change in this watcher invocation.
+            unreleased_boot_delta=true
+          fi
+
           release_due=false
-          if [[ "$BOOT_CHANGED" == true ]] || (( release_input_commits >= 5 )); then
+          if [[ "$unreleased_boot_delta" == true ]] || (( release_input_commits >= 5 )); then
             release_due=true
           fi
 
@@ -167,6 +179,7 @@ jobs:
             echo "merge_sha=$merge_sha"
             echo "release_due=$release_due"
             echo "release_input_commits=$release_input_commits"
+            echo "unreleased_boot_delta=$unreleased_boot_delta"
           } >> "$GITHUB_OUTPUT"
 
       - name: Dispatch combined verified release build
