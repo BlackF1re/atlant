@@ -1,12 +1,15 @@
 [Unit]
-Description=AtlANTian volatile APT workspace
+Description=AtlANTian volatile APT index workspace
 Before=systemd-tmpfiles-setup.service
 
 [Mount]
 What=tmpfs
 Where=/run/apt
 Type=tmpfs
-Options=rw,nosuid,nodev,noexec,noatime,mode=0755,size=50%
+# tmpfs consumes memory only for pages actually used, but a fixed ceiling keeps
+# a large APT transaction from claiming half of a 512 MiB board. Downloaded .deb
+# archives are deliberately not stored here.
+Options=rw,nosuid,nodev,noexec,noatime,mode=0755,size=96M
 
 [Install]
 WantedBy=local-fs.target

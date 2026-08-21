@@ -15,16 +15,26 @@ JOBS=${JOBS:-$(nproc)}
 TARGET=${1:-all}
 CROSS_COMPILE=${CROSS_COMPILE:-arm-linux-gnueabihf-}
 
-[[ -d "$SRC/.git" && -d "$ROOTFS" && -f "$BOARD_DTS" && -f "$FRAGMENT" && -f "$PRUNE_FRAGMENT" ]] || {
-  echo 'missing Linux source, rootfs, board DTS, or kernel fragments' >&2; exit 2;
+case "$TARGET" in
+  all|dtb|config) ;;
+  *) echo "usage: $0 [all|dtb|config]" >&2; exit 64 ;;
+esac
+[[ -f "$BOARD_DTS" && -f "$FRAGMENT" && -f "$PRUNE_FRAGMENT" ]] || {
+  echo 'missing board DTS or kernel fragments' >&2; exit 2;
 }
 
+# This is the single source-preparation path for local and CI builds. It fetches
+# only the configured immutable commit and verifies that the source itself
+# reports the configured Linux version. A tag is metadata, never a source pin.
+bash "$PROJECT/scripts/prepare-kernel-source.sh" "$SRC"
+[[ -d "$SRC/.git" ]] || { echo "missing prepared Linux source: $SRC" >&2; exit 2; }
+
 cd "$SRC"
-TAG="v${ATLANTIAN_KERNEL_VERSION}"
-if ! git -c safe.directory="$SRC" describe --tags --exact-match 2>/dev/null | grep -qx "$TAG"; then
-  git -c safe.directory="$SRC" fetch --depth 1 https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git "$TAG"
-  git -c safe.directory="$SRC" checkout --detach FETCH_HEAD
-fi
+actual_commit=$(git -c safe.directory="$SRC" rev-parse HEAD)
+[[ $actual_commit == "$ATLANTIAN_KERNEL_COMMIT" ]] || {
+  echo "Linux source moved after preparation: expected $ATLANTIAN_KERNEL_COMMIT, got $actual_commit" >&2
+  exit 2
+}
 
 # Mainline 6.12 contains the OF overlay core but no userspace attachment API.
 # Vendor the small, source-audited configfs frontend used by Raspberry Pi
@@ -146,6 +156,11 @@ done
 grep -qx 'CONFIG_XILINX_XADC=y' .config || {
   echo 'XADC must be built into the AtlANTian kernel' >&2; exit 3;
 }
+
+if [[ $TARGET = config ]]; then
+  echo "Linux $ATLANTIAN_KERNEL_VERSION configuration contract passed at $ATLANTIAN_KERNEL_COMMIT"
+  exit 0
+fi
 if [[ $TARGET = dtb ]]; then
   make -j"$JOBS" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" xilinx/zynq-bitmain-antminer-s9.dtb
   mkdir -p "$OUT"
@@ -153,8 +168,8 @@ if [[ $TARGET = dtb ]]; then
   echo "Device tree updated in $OUT/devicetree.dtb"
   exit 0
 fi
-[[ $TARGET = all ]] || { echo "usage: $0 [all|dtb]" >&2; exit 64; }
 
+[[ -d "$ROOTFS" ]] || { echo "missing rootfs for full kernel build: $ROOTFS" >&2; exit 2; }
 make -j"$JOBS" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" zImage modules xilinx/zynq-bitmain-antminer-s9.dtb
 rm -rf "$ROOTFS/lib/modules" "$ROOTFS"/boot/vmlinuz-* "$ROOTFS"/boot/initrd.img-* "$ROOTFS"/boot/System.map-* "$ROOTFS"/boot/config-*
 make ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" modules_install INSTALL_MOD_PATH="$ROOTFS"

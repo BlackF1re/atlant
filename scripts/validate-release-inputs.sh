@@ -41,9 +41,18 @@ verify_arch_index() {
 [[ $DEBIAN_CODENAME =~ ^[a-z0-9][a-z0-9-]*$ ]] || fail 'DEBIAN_CODENAME is invalid'
 [[ $DEBIAN_MAJOR =~ ^[0-9]+$ ]] || fail 'DEBIAN_MAJOR must be numeric'
 [[ $ARCH == armhf ]] || fail 'Debian target architecture must be armhf'
+
+# Linux is automatically refreshed only inside one deliberately selected LTS
+# series. The watcher discovers tags, but releases build an immutable commit.
+[[ $ATLANTIAN_KERNEL_SERIES =~ ^[0-9]+\.[0-9]+$ ]] || fail 'ATLANTIAN_KERNEL_SERIES must be major.minor'
+[[ $ATLANTIAN_KERNEL_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'ATLANTIAN_KERNEL_VERSION must be a stable patch release'
+[[ $ATLANTIAN_KERNEL_VERSION == "$ATLANTIAN_KERNEL_SERIES".* ]] || fail 'kernel version is outside ATLANTIAN_KERNEL_SERIES'
+[[ $ATLANTIAN_KERNEL_REPOSITORY == https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git ]] || fail 'unexpected Linux stable repository'
 [[ $ATLANTIAN_KERNEL_COMMIT =~ ^[0-9a-f]{40}$ ]] || fail 'ATLANTIAN_KERNEL_COMMIT must be an immutable 40-character commit ID'
+printf 'validated %-22s %s (%s)\n' 'Linux source' "$ATLANTIAN_KERNEL_COMMIT" "$ATLANTIAN_KERNEL_VERSION"
+
 [[ $ATLANTIAN_UBOOT_COMMIT =~ ^[0-9a-f]{40}$ ]] || fail 'ATLANTIAN_UBOOT_COMMIT must be an immutable 40-character commit ID'
-[[ $ATLANTIAN_UBOOT_VERSION =~ ^[0-9]{4}\.[0-9]{2}$ ]] || fail 'ATLANTIAN_UBOOT_VERSION must be YYYY.MM'
+[[ $ATLANTIAN_UBOOT_VERSION =~ ^[0-9]{4}\.[0-9]{2}(\.[0-9]+)?$ ]] || fail 'ATLANTIAN_UBOOT_VERSION must be a stable YYYY.MM[.N] release'
 [[ $ATLANTIAN_UBOOT_REPOSITORY == https://github.com/u-boot/u-boot.git ]] || fail 'unexpected U-Boot source repository'
 [[ $ATLANTIAN_UBOOT_DEFCONFIG == bitmain_antminer_s9_defconfig ]] || fail 'unexpected U-Boot board defconfig'
 printf 'validated %-22s %s (%s)\n' 'U-Boot source' "$ATLANTIAN_UBOOT_COMMIT" "$ATLANTIAN_UBOOT_VERSION"
@@ -66,4 +75,4 @@ verify_arch_index "$DEBIAN_CODENAME" "$DEBIAN_SNAPSHOT_MIRROR/dists/$DEBIAN_CODE
 verify_arch_index "$DEBIAN_CODENAME-updates" "$DEBIAN_SNAPSHOT_MIRROR/dists/${DEBIAN_CODENAME}-updates/main/binary-$ARCH/Release"
 verify_arch_index "$DEBIAN_CODENAME-security" "$DEBIAN_SECURITY_SNAPSHOT_MIRROR/dists/${DEBIAN_CODENAME}-security/main/binary-$ARCH/Release"
 
-echo "release inputs validated for Debian $DEBIAN_MAJOR ($DEBIAN_CODENAME) / $ARCH"
+echo "release inputs validated for Debian $DEBIAN_MAJOR ($DEBIAN_CODENAME) / $ARCH; Linux $ATLANTIAN_KERNEL_VERSION and U-Boot $ATLANTIAN_UBOOT_VERSION are immutable pins"

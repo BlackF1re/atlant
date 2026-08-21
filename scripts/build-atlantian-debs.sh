@@ -79,9 +79,9 @@ EOF_GUARD
   chmod 0755 "$package_root/DEBIAN/preinst"
 }
 
-# atlantian-kernel is an SD-layout package: its postinst atomically refreshes a
-# FAT /boot partition. A NAND system has no such boot partition and must update
-# its raw boot region + SquashFS base through the NAND maintenance installer.
+# atlantian-kernel is an SD-layout package. A NAND system has no FAT boot
+# partition and must update its raw boot region + SquashFS base through the NAND
+# maintenance installer.
 nand_kernel_guard() {
   local package_root=$1
   sed -i '/^exit 0$/i\
@@ -179,7 +179,7 @@ dpkg-deb --build --root-owner-group "$p" "$OUT/atlantian-platform_${PACKAGE_VERS
 
 k="$work/kernel"
 mkdir -p "$k"
-control "$k" atlantian-kernel armhf 'AtlANTian kernel and SD boot firmware'
+control "$k" atlantian-kernel armhf 'AtlANTian kernel and transactional SD boot payload'
 major_guard "$k"
 nand_kernel_guard "$k"
 mkdir -p "$k/usr/lib/atlantian/boot" "$k/lib/modules"
@@ -188,22 +188,85 @@ BOOT_BIN="$ROOT/out/bootloader/BOOT.bin" \
 UBOOT_IMG="$ROOT/out/bootloader/u-boot.img" \
 DTB="$ROOT/out/boot/devicetree.dtb" \
 ZIMAGE="$ROOT/out/boot/zImage" \
-  bash "$ROOT/scripts/populate-boot-files.sh" "$k/usr/lib/atlantian/boot"
+  bash "$ROOT/scripts/populate-boot-files.sh" "$k/usr/lib/atlantian/boot" package
 install -m 0644 "$ROOT/out/boot/zImage" "$k/usr/lib/atlantian/boot/zImage"
 cat >"$k/DEBIAN/postinst" <<'EOF_KERNEL_POST'
 #!/bin/sh
+# Power-loss-safe SD kernel transaction. Early BOOT.bin/u-boot.img stay on the
+# known-good boot chain; only the checksummed kernel+DTB FIT slot is switched.
 set -eu
 source=/usr/lib/atlantian/boot
 target=/boot
+abi=$(cat "$source/atlantian-boot-abi")
+fit="$source/atlantian.itb"
 [ -d "$target" ] || { echo 'AtlANTian SD boot partition is not mounted at /boot' >&2; exit 1; }
+[ -s "$fit" ] && [ -s "$source/boot.scr" ] || { echo 'AtlANTian boot package is incomplete' >&2; exit 1; }
+case "$abi" in ''|*[!0-9]*) echo 'invalid AtlANTian boot ABI' >&2; exit 1;; esac
 
-for name in u-boot.img boot.scr uEnv.txt devicetree.dtb uImage; do
-  install -m 0644 "$source/$name" "$target/.$name.new"
-  mv -f "$target/.$name.new" "$target/$name"
-done
-install -m 0644 "$source/BOOT.bin" "$target/.BOOT.bin.new"
-mv -f "$target/.BOOT.bin.new" "$target/BOOT.bin"
-rm -f "$target/zImage" "$target/.zImage.new"
+write_fit() {
+  dest=$1
+  rm -f "$target/.$dest.new"
+  install -m 0644 "$fit" "$target/.$dest.new"
+  cmp -s "$fit" "$target/.$dest.new" || { echo "FIT staging verification failed: $dest" >&2; exit 1; }
+  sync
+  mv -f "$target/.$dest.new" "$target/$dest"
+  sync
+}
+
+# Migration from the historical uImage+DTB layout is itself ordered safely:
+# both FIT slots land first, then boot.scr is atomically replaced. Until that
+# final rename the old loader and old payload remain untouched and bootable.
+if [ ! -s "$target/atlantian-A.itb" ] || [ ! -s "$target/atlantian-B.itb" ]; then
+  write_fit atlantian-A.itb
+  write_fit atlantian-B.itb
+  install -m 0644 "$source/boot.scr" "$target/.boot.scr.new"
+  cmp -s "$source/boot.scr" "$target/.boot.scr.new" || exit 1
+  sync
+  mv -f "$target/.boot.scr.new" "$target/boot.scr"
+  printf '%s\n' "$abi" >"$target/.atlantian-boot-abi.new"
+  sync
+  mv -f "$target/.atlantian-boot-abi.new" "$target/atlantian-boot-abi"
+  rm -f "$target/atlantian-slot-B"
+  sync
+  # Keep the historical uImage/DTB for one boot generation as an additional
+  # migration fallback. A later normal slot transaction removes them.
+  exit 0
+fi
+
+installed_abi=$(cat "$target/atlantian-boot-abi" 2>/dev/null || true)
+[ "$installed_abi" = "$abi" ] || {
+  echo "online boot-loader ABI migration is unsupported ($installed_abi -> $abi); reflash the SD image" >&2
+  exit 78
+}
+cmp -s "$source/boot.scr" "$target/boot.scr" || {
+  echo 'online boot.scr replacement is intentionally blocked; reflash is required for a boot-loader ABI change' >&2
+  exit 78
+}
+
+if [ -e "$target/atlantian-slot-B" ]; then
+  inactive=atlantian-A.itb
+  next=A
+else
+  inactive=atlantian-B.itb
+  next=B
+fi
+write_fit "$inactive"
+
+# The slot marker is the transaction commit record. FAT rename/unlink is one
+# directory-entry operation; every large payload write has already been synced.
+if [ "$next" = B ]; then
+  printf 'B\n' >"$target/.atlantian-slot-B.new"
+  sync
+  mv -f "$target/.atlantian-slot-B.new" "$target/atlantian-slot-B"
+else
+  rm -f "$target/atlantian-slot-B"
+fi
+sync
+
+# Legacy files are no longer part of the active or rollback boot path once a
+# normal A/B transaction has completed.
+rm -f "$target/uImage" "$target/devicetree.dtb" \
+  "$target/.uImage.new" "$target/.devicetree.dtb.new" "$target/.atlantian-slot-B.new"
 sync
 EOF_KERNEL_POST
 chmod 0755 "$k/DEBIAN/postinst"
