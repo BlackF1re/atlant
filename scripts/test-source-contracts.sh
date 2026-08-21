@@ -196,9 +196,9 @@ require_text 'simple extroot command' 'atlantian-storage adopt' scripts/atlantia
 # Update boundaries and release-upgrade gate.
 require_text 'live NAND .deb update refusal' 'atlantian-kernel cannot update a live NAND edition' scripts/build-atlantian-debs.sh
 require_text 'SD inactive FIT staging' 'inactive=' scripts/build-atlantian-debs.sh
-require_text 'SD FIT byte verification' 'cmp "$stage" "$source/atlantian.itb"' scripts/build-atlantian-debs.sh
+require_text 'SD FIT byte verification' 'cmp -s "$fit" "$target/.$dest.new"' scripts/build-atlantian-debs.sh
 require_text 'SD FIT active marker' 'atlantian-slot-B' scripts/build-atlantian-debs.sh
-require_text 'SD legacy migration detection' 'legacy_layout=false' scripts/build-atlantian-debs.sh
+require_text 'SD legacy migration detection' 'if [ ! -s "$target/atlantian-A.itb" ] || [ ! -s "$target/atlantian-B.itb" ]; then' scripts/build-atlantian-debs.sh
 require_text 'NAND sysupgrade wrapper' 'atlantian-sysupgrade-nand' scripts/build-atlantian-debs.sh scripts/install-nand-tools.sh
 require_text 'NAND maintenance tool' 'atlantian-nand-upgrade' scripts/install-nand-tools.sh scripts/atlantian-sysupgrade-nand.sh
 require_text 'NAND cross-major fail closed' 'requires a clean NAND reinstall' scripts/atlantian-nand-upgrade.sh
