@@ -30,8 +30,14 @@ BootROM uses.
 6. Log in as `root` and set a password or SSH key before using an untrusted
    network.
 
-The result is a normal writable Debian-compatible system. For exact flashing,
-provenance verification and first-boot checks, use [SD Quick Start](QUICKSTART.md).
+The result is a normal writable Debian-compatible system. Its disk layout stays
+simple—FAT BOOT + ext4 ROOT—but BOOT contains two checksummed FIT kernel/DT slots
+inside the existing 48 MiB partition. They are used for power-loss-safe platform
+updates without an extra partition or second rootfs. The factory image starts
+from slot A and keeps an identical slot B as the initial rollback copy.
+
+For exact flashing, provenance verification and first-boot checks, use
+[SD Quick Start](QUICKSTART.md).
 
 ## Install the same release to NAND
 
@@ -87,8 +93,12 @@ Storage semantics are documented in [Persistence](PERSISTENCE.md).
 
 ## Updates after installation
 
-Use normal APT for Debian packages and `atlantian-sysupgrade` for AtlANTian
-platform releases. NAND platform updates stage maintenance through the paired
+Use normal live APT for Debian packages and `atlantian-sysupgrade` for AtlANTian
+platform releases. Debian package maintenance does not wait for a new image.
+On SD, the custom kernel and matching DT are committed through the inactive A/B
+FIT slot; the installed early `BOOT.bin`/U-Boot chain is intentionally not
+rewritten by the online transaction. New complete images contain the currently
+validated U-Boot. NAND platform updates stage maintenance through the paired
 recovery SD; Debian-major NAND changes require a clean reinstall.
 
 See [Upgrading](UPGRADING.md) for the complete update procedure.

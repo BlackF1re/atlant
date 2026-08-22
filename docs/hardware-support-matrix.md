@@ -35,8 +35,9 @@ claims them.
 | XC7Z010 PS: two Cortex-A9 cores | Ready | ARM/Zynq SMP | normal Debian services and native applications |
 | NEON and hardware floating point | Ready | ARMv7 `armhf` userspace | do not require a newer CPU ISA |
 | 512 MiB and 1 GiB DDR3 | Ready | U-Boot runtime probe, HIGHMEM, no fixed Linux `mem=` cap | retain both sizes in release/bench coverage |
-| source-built SD first stage | Ready | pinned U-Boot SPL + `u-boot.img`; cold boot/reboot proven on both RAM sizes | default recovery path |
+| source-built SD first stage | Ready | exact accepted U-Boot commit, SPL + `u-boot.img`; cold boot/reboot proven on both RAM sizes | stable U-Boot candidates are software-gated automatically; low-level physical validation remains required |
 | microSD boot and root | Ready | FAT BOOT + ext4 ROOT, first-boot expansion | large-card/endurance behavior is ordinary media-dependent storage |
+| transactional SD kernel/DT | Validation | A/B SHA-256 FIT slots inside existing BOOT; inactive write/verify/sync before marker switch; CI validates layout and fallback script | bench both slots, fallback, historical migration and controlled power-loss points |
 | 256 MiB Micron NAND visibility | Ready | PL35X MTD; verified raw+OOB backup path | preserve backup before destructive operations |
 | AtlANTian NAND install/boot, 512 MiB | Ready | destructive install and cold/warm boot through OverlayFS proven | regression-test low-level changes |
 | AtlANTian NAND install/boot, 1 GiB | Ready | destructive install and cold/warm boot through OverlayFS proven | regression-test low-level changes |
@@ -104,11 +105,25 @@ U-Boot probes a 1 GiB maximum DDR aperture and updates the DT memory node with t
 detected bank size. Observed Linux usable memory is roughly 473 MiB on 512 MiB
 boards and 970-980 MiB on 1 GiB boards after reservations.
 
-Production SD chain:
+Current production SD chain:
 
 ```text
-BootROM -> SPL BOOT.bin -> u-boot.img -> boot.scr -> uImage + DTB -> ext4 root
+BootROM -> SPL BOOT.bin -> u-boot.img -> boot.scr
+                                      -> active atlantian-{A|B}.itb (kernel + DTB)
+                                      -> fallback FIT slot if needed
+                                      -> ext4 root
 ```
+
+Historical releases used `boot.scr -> uImage + devicetree.dtb`. The first update
+to the current layout retains that old payload as a one-generation migration
+fallback only after both new FIT slots have already been written.
+
+The early SD first-stage files are not replaced by online platform updates.
+Fresh factory images use the accepted U-Boot source pin; NAND updates replace
+their release-matched raw boot payload through the paired recovery-SD transaction.
+The A/B FIT implementation is current source policy but remains `Validation`
+until the controlled physical checks in [Hardware validation](HARDWARE-VALIDATION.md)
+are recorded.
 
 Physical boot selection:
 
@@ -170,7 +185,8 @@ for future hardware work without confusing SoC capability with PCB capability.
 
 | Capability | Status | Policy |
 |---|---|---|
-| Debian-compatible `armhf` userspace | Ready | `ID=debian`; AtlANTian identity remains visible in release metadata |
+| Debian-compatible `armhf` userspace | Ready | `ID=debian`; factory Snapshot is pinned while runtime APT follows live installed codename |
+| custom Linux board kernel | Ready | exact stable LTS commit per release; automatic patch tracking never changes the selected LTS series |
 | systemd, SSH and standard network tooling | Ready | normal Debian service model |
 | IPv4/IPv6, DHCP and static Ethernet configuration | Ready | use supported GEM0 network interface |
 | Linux DT and configfs overlays | Ready | board DTB plus FPGA profile overlays |

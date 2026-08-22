@@ -69,7 +69,7 @@ published as the normal user download.
 | Password | empty for first provisioning |
 | UART | `115200 8N1` |
 | RAM | detected by U-Boot; same image supports 512 MiB and 1 GiB boards |
-| Boot policy | compiled `bootcmd`; persistent U-Boot environment disabled |
+| Boot policy | immutable U-Boot environment; FIT slot A first, slot B rollback |
 
 SD cold boot and software reboot are physically validated on both 512 MiB and
 1 GiB boards.
@@ -90,7 +90,11 @@ atlantian-fpga status
 ```
 
 Expected storage is FAT `/boot` plus writable ext4 `/`, with ROOT expanded to the
-card. `/etc/os-release` intentionally reports `ID=debian` for compatibility while
+card. Inside the same FAT partition AtlANTian keeps two SHA-256-checked FIT kernel
+slots (`atlantian-A.itb` and `atlantian-B.itb`) for transactional platform
+updates; no extra update partition or second rootfs is created.
+
+`/etc/os-release` intentionally reports `ID=debian` for compatibility while
 `PRETTY_NAME`/`VARIANT` identify AtlANTian.
 
 ## 6. Use Debian normally
@@ -101,13 +105,24 @@ apt upgrade
 apt install git python3 tmux
 ```
 
-AtlANTian platform updates are separate:
+These commands use live Debian repositories for the installed codename and do not
+wait for a new AtlANTian image. Repository indexes are kept in a bounded volatile
+workspace; package downloads use storage-backed APT staging so large transactions
+do not reserve half of RAM on a 512 MiB board.
+
+AtlANTian platform/kernel updates are separate:
 
 ```sh
 atlantian-sysupgrade --check
 atlantian-sysupgrade --notes
 atlantian-sysupgrade
 ```
+
+On SD, a platform update writes the new kernel+DTB FIT into the inactive slot,
+verifies/syncs it, and only then switches the active-slot marker. The old slot is
+left as automatic fallback. Early `BOOT.bin`/U-Boot are intentionally not
+rewritten during this online transaction; a freshly flashed image contains the
+current validated bootloader.
 
 See [Upgrading](UPGRADING.md) before a platform or Debian-major transition.
 
@@ -124,7 +139,8 @@ See [Upgrading](UPGRADING.md) before a platform or Debian-major transition.
 | Symptom | Check |
 |---|---|
 | flasher does not accept `.img.xz` | decompress to `.img`, then write that raw image |
-| U-Boot stops at prompt | current image and FAT `boot.scr` |
+| U-Boot stops at prompt | current image, FAT `boot.scr`, `atlantian-A.itb`/`atlantian-B.itb` |
+| active FIT fails | boot script automatically attempts the other complete FIT slot |
 | unexpected RAM | `grep MemTotal /proc/meminfo`; confirm fitted DDR |
 | no Ethernet | `networkctl`, `ip link`, `ip address` |
 | first-boot reboot | expected ROOT expansion behavior |

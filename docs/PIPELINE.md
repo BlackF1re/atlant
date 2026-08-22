@@ -1,9 +1,9 @@
 # Build and release pipeline
 
-This document owns CI/release behavior: triggers, automatic versioning, protected
-maintenance merges, verified artifacts, publication and download-metric refreshes.
-Debian Snapshot discovery itself is documented in
-[Debian lifecycle](DEBIAN-LIFECYCLE.md).
+This document owns CI/release behavior: triggers, upstream-input tracking,
+automatic versioning, protected maintenance merges, verified artifacts,
+publication and download-metric refreshes. Debian-generation policy itself is
+documented in [Debian lifecycle](DEBIAN-LIFECYCLE.md).
 
 ## Production triggers
 
@@ -13,7 +13,7 @@ Debian Snapshot discovery itself is documented in
 |---|---|---|
 | first qualifying push in a repository with no AtlANTian release tag | yes | yes, automatically |
 | later push to `main` touching a source/build-input path | after 5 qualifying commits | yes, automatically |
-| Debian Watch dispatch (`origin=debian-watch`) | yes | yes, automatically |
+| eligible Upstream Base Watch dispatch (compatibility origin `debian-watch`) | yes | yes, automatically |
 | manual `workflow_dispatch`, `publish=false` | yes | no |
 | manual `workflow_dispatch`, `publish=true` | yes or reuse | yes |
 
@@ -33,21 +33,55 @@ Documentation and workflow-only maintenance are excluded from the full release
 build path. `scripts/generate-release-notes.sh` is also excluded because it changes
 publication presentation rather than image contents.
 
-After the first release, automatic source publication batches five qualifying
-commits since the latest version tag. A fresh repository deliberately treats the
-no-release state as bootstrap-ready so the first qualifying push publishes a
-verified release immediately. Manual `publish=true` and Debian Watch bypass the
-five-commit threshold when an immediate release is required.
+After the first release, ordinary source publication batches five qualifying
+release-input commits since the latest version tag. A fresh repository treats the
+no-release state as bootstrap-ready so its first qualifying push publishes a
+verified release immediately. Manual `publish=true` and an **eligible** upstream
+watcher transaction bypass the five-commit threshold.
+
+The daily upstream watcher does not create a separate release stream for each
+component. Debian-only Snapshot changes remain batched because installed systems
+already consume live Debian updates. A Linux or U-Boot input change makes the
+current combined upstream transaction immediately release-eligible, so accepted
+Debian, Linux and U-Boot inputs land in one image/release rather than three.
 
 A newer run on the same ref cancels an older in-progress release run. Publication
 also requires the built source SHA to remain the current `main` tip.
 
-## Protected Debian maintenance
+## Upstream Base Watch
 
-Debian Watch never pushes directly to protected `main` and has no protection
-bypass. When a Snapshot changes it:
+The historical workflow filename is `.github/workflows/debian-watch.yml`, but the
+workflow is now named **Upstream Base Watch**. It runs daily at 06:17 Asia/Tomsk
+and tracks three reproducible factory inputs:
 
-1. creates a short-lived `maintenance/debian-snapshot-*` branch and PR;
+| Input | Automatic scope | Candidate gate |
+|---|---|---|
+| Debian | current configured codename; exact Snapshot metadata | Snapshot must contain the exact observed main/updates/security Release files and still publish `armhf` |
+| Linux | patch releases inside the selected LTS series only, currently `6.12.y` | candidate is resolved to an immutable stable commit and the complete AtlANTian Kconfig/board contract is generated successfully |
+| U-Boot | official stable `vYYYY.MM` tags only | both SD/recovery and NAND/SPL configurations must compile successfully |
+
+Linux LTS-series changes are never automatic. U-Boot RC tags and arbitrary branch
+heads are never automatic candidates. The watcher resolves a candidate tag to an
+exact commit before it changes repository policy; production builds consume the
+commit SHA, not the tag.
+
+All candidate changes discovered in one watcher run are staged together. If any
+changed, the watcher validates the combined release-input set, creates **one**
+maintenance commit and merges it through protected `main`. If only Debian changed,
+publication waits for the normal five-input threshold. If Linux or U-Boot changed,
+the same combined transaction is released immediately after protected validation.
+
+The internal dispatch string remains `origin=debian-watch` for compatibility with
+the existing trusted publication gate in `build-release.yml`; the name no longer
+means that the transaction necessarily contains Debian alone.
+
+## Protected upstream maintenance
+
+Upstream Base Watch never pushes directly to protected `main` and has no
+protection bypass. When an upstream input changes it:
+
+1. creates one short-lived `maintenance/upstream-base-*` branch and PR containing
+   the whole Debian/Linux/U-Boot transaction;
 2. asks GitHub for the PR's exact synthetic merge candidate;
 3. exposes that immutable candidate through a short-lived
    `maintenance-validation/*` branch;
@@ -58,16 +92,42 @@ bypass. When a Snapshot changes it:
 6. publishes a `Validate=success` commit status linked to that successful CI run
    so the token-created PR satisfies the repository's required-status interface;
 7. squash-merges through GitHub's protected-branch merge API;
-8. verifies the resulting `main` SHA and explicitly dispatches `Build & Release`
-   with `origin=debian-watch`.
+8. verifies the resulting `main` SHA and, when release-eligible, explicitly
+   dispatches `Build & Release` for that protected revision.
 
 The status bridge records the result of real merge-candidate CI; it is not a
 replacement for validation and cannot be written before that CI succeeds. The
 explicit dispatches are necessary because events created with the workflow's
 `GITHUB_TOKEN` do not recursively create the normal PR/push workflow chain.
 
-The inactivity heartbeat uses the same protected merge path but changes no release
-input and never dispatches a release build.
+A later no-change watcher run can recover the narrow window between a successful
+upstream merge and a missed release dispatch. An unreleased Linux/U-Boot delta is
+immediately redispatched. Debian-only deltas remain subject to the same five-input
+threshold. The inactivity heartbeat uses the same protected merge path, changes no
+release input and never dispatches a release build.
+
+## Pull-request validation parity
+
+The required `CI / Validate` check deliberately runs the cheap source contracts
+that the production build runs before expensive rootfs/kernel work. That set
+includes:
+
+```text
+test-build-orchestration.sh
+test-runtime-policy.sh
+test-release-versioning.sh
+test-source-contracts.sh
+test-update-leds.sh
+test-release-metrics.sh
+```
+
+Keeping `test-release-metrics.sh` in the required PR gate is intentional: release
+metrics/publication contracts must not be allowed to pass PR validation and then
+fail only after an expensive production image build.
+
+Changes to frozen release inputs additionally execute
+`validate-release-inputs.sh`; workflow changes also pass the pinned-Action policy
+and a small cache/artifact smoke test.
 
 ## Automatic release identity
 
@@ -97,12 +157,14 @@ publishable version from repository tags:
 - rerunning an already-tagged source SHA resolves to that existing version rather
   than inventing another one.
 
-Source revision and Debian Snapshot timestamp are metadata, not release-ordering
-components. For prereleases, Debian package metadata retains native ordering, for
+Source revision, Debian Snapshot timestamp, Linux version/commit and U-Boot
+version/commit are release metadata and build identities, not separate release
+number axes. For prereleases, Debian package metadata retains native ordering, for
 example `X.Y.Z~alpha.N-1` for release `X.Y.Z-alpha.N`.
 
-A Debian-major transition remains explicit because it changes the release line
-itself.
+A Debian-major transition or Linux LTS-series transition remains explicit because
+it changes project compatibility policy rather than merely advancing a stable
+patch input.
 
 ## Plan → build → publish
 
@@ -133,24 +195,52 @@ publication requests it checks:
 A same-version/same-SHA release is an idempotent no-op. A compatible verified
 artifact can be reused for publication.
 
+### Source preparation
+
+A clean source checkout is a first-class build path. `build-kernel.sh` calls
+`prepare-kernel-source.sh`, which creates `out/linux-src` when absent, fetches the
+**exact** `ATLANTIAN_KERNEL_COMMIT`, verifies `HEAD`, and verifies that the source
+reports `ATLANTIAN_KERNEL_VERSION`. It never replaces that commit by resolving a
+version tag during the build.
+
+When a cache already contains the same kernel commit, tracked source transforms
+are reset while in-tree build objects are retained. When the commit changes, the
+source tree is detached at the new exact SHA and stale ignored/untracked objects
+are removed. CI's explicit source-cache preparation remains a performance layer;
+local correctness does not depend on that CI-only step.
+
+U-Boot build scripts similarly fetch and verify only
+`ATLANTIAN_UBOOT_COMMIT`. The watcher may use an official stable tag to discover a
+new candidate, but the tag stops being an authority once its commit has been
+recorded.
+
 ### Build and verify
 
 A required build performs the expensive path:
 
-- source/build contract checks, including release-client/public-filename tests;
+- source/build contract checks, including release-client/public-filename and
+  release-metrics tests;
 - frozen release-input validation;
 - Debian rootfs build;
-- pinned Linux build;
+- exact-pinned Linux build;
 - SD/NAND U-Boot and NAND payload build;
 - unified raw image creation;
 - XZ compression plus raw/decompressed SHA-256 equivalence check;
 - release artifact validation;
-- SD image layout validation;
+- SD image layout and transactional FIT-slot validation;
 - NAND artifact validation;
 - SD upgrade integration test;
 - NAND rebase integration test;
 - source-tree integrity check;
 - GitHub/Sigstore build provenance attestation.
+
+The SD BOOT partition contains two checksummed FIT images,
+`atlantian-A.itb` and `atlantian-B.itb`. Each FIT binds the kernel and matching DTB
+into one SHA-256-checked boot object. The factory image begins on slot A. Online
+kernel updates stage the new FIT into the inactive slot and change only a small
+active-slot marker after write verification and `sync`; the other slot remains a
+rollback candidate. The existing 48 MiB FAT BOOT partition is reused, so there is
+no second rootfs or dedicated update partition.
 
 The raw `atlantian-<release>.img` remains inside the verified Actions artifact so
 layout and upgrade gates can use the exact disk image without a public Release
@@ -167,27 +257,18 @@ VERIFIED-SOURCE-SHA
 VERIFIED-VERSION
 ```
 
-and uploads `atlantian-verified-<full-source-SHA>` with a 90-day maximum retention
-period. The sealed artifact contains the raw `.img`, verified `.img.xz`, canonical
-Debian `.deb` filenames and its internal checksum manifest. A failed publication
-can therefore be retried for the same SHA without rebuilding the OS while that
-artifact remains available.
-
-Actions storage is bounded independently of that maximum retention. After a
-release is published, `Download Metrics` keeps the newest published release's
-SHA-sealed artifact for the next real upgrade test and removes SHA-sealed artifacts
-belonging to older published releases. Unpublished verified artifacts are retained
-so a failed publication can still be retried without rebuilding. Legacy
-version-named build artifacts, which are no longer consumed by the upgrade gate,
-are also removed. In steady state the repository therefore retains one large
-published build artifact rather than a 90-day history of every release.
+and uploads `atlantian-verified-<full-source-SHA>`. The full artifact is retained
+until publication succeeds. After publication the storage-pruning workflow keeps
+the newest published release's compact verified artifact needed by the next
+release-upgrade test and removes superseded published build artifacts. Unpublished
+verified artifacts remain eligible for publication retry.
 
 ### Publish
 
 Publication is allowed only when:
 
-- publication was requested by a qualifying push, Debian Watch or manual
-  `publish=true`;
+- publication was requested by a qualifying push, eligible upstream transaction
+  or manual `publish=true`;
 - the build succeeded or a verified same-SHA artifact was reused;
 - the workflow source SHA is still current `main`;
 - the target tag/release does not belong to another source revision.
@@ -236,10 +317,32 @@ release:
 - tags are never retargeted automatically;
 - a concurrent same-tag/same-SHA publication is idempotent.
 
-Release **descriptions** are presentation metadata and are treated separately.
-The Download Metrics workflow may idempotently normalize historical `Artifacts`
+Release descriptions are presentation metadata and are treated separately. The
+Download Metrics workflow may idempotently normalize historical `Artifacts`
 tables so they use the current per-file Downloads column. It does not retarget a
 tag, replace release assets or alter release identity.
+
+## Runtime update model
+
+Factory reproducibility and runtime maintenance deliberately use different
+sources:
+
+| Layer | Factory/release build | Installed system |
+|---|---|---|
+| Debian userspace | frozen Snapshot | live repositories for installed codename via ordinary APT |
+| AtlANTian kernel/DT | exact configured Linux commit | verified AtlANTian release package; transactional A/B FIT on SD |
+| SD early U-Boot | exact configured U-Boot commit in a freshly flashed image | deliberately retained during online package update |
+| NAND early boot/base | release-matched raw boot + SquashFS bundle | same-major maintenance via paired recovery SD |
+
+This means a board does **not** wait for a new AtlANTian image to receive normal
+Debian security updates. Conversely, ordinary Debian APT cannot silently replace
+the board-specific kernel/DT/U-Boot contract with an unrelated generic package.
+
+The APT runtime policy keeps repository indexes in a bounded 96 MiB tmpfs.
+Downloaded `.deb` files use normal storage-backed APT staging and are configured
+not to be retained after installation. The prior `size=50%` RAM-backed archive
+model is intentionally not used, because large package transactions must remain
+viable on 512 MiB boards.
 
 ## Products
 
@@ -249,7 +352,7 @@ tag, replace release assets or alter release identity.
 | `atlantian-nand-<release>.tar.zst` | checksummed NAND raw-boot + SquashFS payload |
 | three version-matched `.deb` files | AtlANTian platform/kernel/release updates; public filename is GitHub-safe while internal Debian Version stays canonical |
 | `atlantian-update.json` | best-effort anonymous update-transaction counter marker; not trusted package identity |
-| `RELEASE-METADATA.json` | release, Debian Snapshot, source and measured raw-image storage metadata |
+| `RELEASE-METADATA.json` | release, Debian Snapshot, Linux/U-Boot source identity and measured raw-image storage metadata |
 | `SHA256SUMS` | hashes for the public downloadable payload names |
 
 The SD filesystem is not copied wholesale into NAND.
@@ -273,18 +376,14 @@ expressions. Release Notes use those keys in the **Downloads** column of each
 
 The metric workflow can start from a release event, manually, hourly, after a
 `Build & Release` run completes, or when its own workflow definition is changed on
-`main`. The last trigger exists so storage-policy maintenance can take effect
-immediately without starting a system build. The `workflow_run` path has a cheap
-gate: it refreshes Pages only if that Build & Release succeeded **and** a published
-Release exists for its exact head SHA. Plan-only runs therefore do not cause a
-Pages refresh. Automated releases use this completion path because a release
-created by `GITHUB_TOKEN` does not recursively trigger the normal `release`
-workflow event.
+`main`. The `workflow_run` path has a cheap gate: it refreshes Pages only if that
+Build & Release succeeded **and** a published Release exists for its exact head
+SHA. Plan-only runs therefore do not cause a Pages refresh.
 
-On the first applicable refresh after table-format changes, historical release
-descriptions may be normalized idempotently from the actual GitHub asset list.
-Later hourly runs update the Pages JSON without rewriting already-canonical
-release descriptions.
+Refresh validates the paginated Release inventory before deploying Pages and
+fails closed on an empty/incomplete response. Pruning and release-description
+backfill consume the same validated snapshot instead of making independent
+Release-inventory assumptions.
 
 The same workflow has a narrowly scoped `actions: write` pruning job. Cleanup is
 fail-closed: it first proves that the newest published release still has a retained
@@ -305,8 +404,14 @@ validation does not increase either user-facing counter.
 Published builds pin:
 
 - exact Debian Snapshot metadata;
-- Linux source commit;
-- U-Boot source commit.
+- exact Linux source commit and selected LTS series;
+- exact U-Boot source commit from an accepted stable release.
+
+These are reproducible **input identities**, not a claim that arbitrary build
+hosts necessarily emit bit-for-bit identical disk images. The hosted Ubuntu
+runner toolchain and filesystem metadata are not fully hermetic. Production
+artifacts are instead tied to the exact source/workflow execution by their sealed
+checksums and build provenance.
 
 Caches are performance optimizations only:
 
@@ -317,10 +422,9 @@ Caches are performance optimizations only:
 | U-Boot | pinned source tree |
 
 Rootfs, final SD image and NAND products are rebuilt whenever a build is required.
-The separate **verified workflow artifact** is what avoids rebuilding an already
-successful source SHA during a publication retry.
-
-A fresh repository needs no cache bootstrap.
+The separate verified workflow artifact is what avoids rebuilding an already
+successful source SHA during a publication retry. A fresh repository or clean
+local clone needs no cache bootstrap.
 
 ## Fresh repository bootstrap
 
@@ -340,14 +444,14 @@ automatic build + verification + publication
 v<resolved-version> release
 ```
 
-Only subsequent source changes use the five-qualifying-commit batch. Normal GitHub
-publication uses scoped `GITHUB_TOKEN` permissions and requires no repository
-secret.
+Only subsequent ordinary source changes use the five-qualifying-commit batch.
+Normal GitHub publication uses scoped `GITHUB_TOKEN` permissions and requires no
+repository secret.
 
 ## Build graph
 
 ```text
-release line + pinned Debian Snapshot
+release line + pinned Debian Snapshot + exact Linux/U-Boot commits
         ↓
 common Debian rootfs
         ├─ NAND specialization
@@ -361,17 +465,17 @@ SquashFS NAND base + raw boot bundle
         ↓
 embed exact NAND bundle in SD rootfs
         ↓
-FAT BOOT + ext4 ROOT raw image
+FAT BOOT (A/B FIT) + ext4 ROOT raw image
         ↓
 XZ compression + round-trip verification
         ↓
 artifact/update/layout gates
         ↓
-verified SHA artifact (raw + XZ, canonical package names)
+verified SHA artifact
         ↓
 public filename/checksum normalization
         ↓
-optional publication (XZ only)
+optional publication
 ```
 
 NAND geometry/SPL/ECC details belong to [NAND](NAND.md). Physical validation

@@ -63,6 +63,8 @@ fi
 [[ $ATLANTIAN_RELEASE_ID == "atlantian-$ATLANTIAN_VERSION" ]] || fail 'release: release ID must derive only from semantic version'
 [[ $ATLANTIAN_IMAGE_NAME == "$ATLANTIAN_RELEASE_ID" ]] || fail 'release: image name must equal release identity'
 [[ $DEBIAN_SNAPSHOT_TIMESTAMP =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || fail 'release: invalid Debian Snapshot timestamp'
+[[ $ATLANTIAN_KERNEL_SERIES =~ ^[0-9]+\.[0-9]+$ ]] || fail 'release: kernel LTS series must be major.minor'
+[[ $ATLANTIAN_KERNEL_VERSION == "$ATLANTIAN_KERNEL_SERIES".* ]] || fail 'release: kernel version left configured LTS series'
 [[ $ATLANTIAN_KERNEL_COMMIT =~ ^[0-9a-f]{40}$ ]] || fail 'release: kernel commit must be a full immutable SHA'
 [[ $ATLANTIAN_KERNEL_LOCALVERSION =~ ^-atlantian[1-9][0-9]*$ ]] || fail 'release: kernel ABI suffix must be independent and numeric'
 [[ $ATLANTIAN_UBOOT_COMMIT =~ ^[0-9a-f]{40}$ ]] || fail 'release: U-Boot commit must be a full immutable SHA'
@@ -104,7 +106,7 @@ require_text 'kernel Zynq/HIGHMEM generated-config gate' 'CONFIG_ARCH_ZYNQ CONFI
 reject_regex 'no fixed Linux memory cap' '(^|[[:space:]])mem=(496M|512M|1008M|1024M)([[:space:]]|$)' \
   scripts/populate-boot-files.sh scripts/make-sd-image.sh board/zynq-bitmain-antminer-s9.dts board/uboot_bitmain-antminer-s9.dts
 
-# SD/recovery U-Boot.
+# SD/recovery U-Boot and transactional kernel/DT boot.
 require_text 'U-Boot pin' 'ATLANTIAN_UBOOT_COMMIT=' config/u-boot.env
 require_text 'SD SPL payload' "--set-str SPL_FS_LOAD_PAYLOAD_NAME 'u-boot.img'" scripts/build-uboot.sh
 require_text 'SD U-Boot autoboot' "ATLANTIAN_BOOTCOMMAND='fatload mmc 0:1 0x03000000 boot.scr && source 0x03000000'" scripts/build-uboot.sh
@@ -113,8 +115,13 @@ require_text 'SD FAT write support' '--enable FAT_WRITE' scripts/build-uboot.sh
 require_text 'SD immutable environment' '--enable ENV_IS_NOWHERE' scripts/build-uboot.sh
 require_text 'SD no NAND environment' '--disable ENV_IS_IN_NAND' scripts/build-uboot.sh
 require_text 'SD watchdog remains disarmed' '--disable WATCHDOG_AUTOSTART' scripts/build-uboot.sh
-require_text 'normal SD kernel load' 'fatload mmc 0:1 0x02000000 uImage' scripts/populate-boot-files.sh
-require_text 'normal SD DT load' 'fatload mmc 0:1 0x01F00000 devicetree.dtb' scripts/populate-boot-files.sh
+require_text 'SD FIT slot A' 'atlantian-A.itb' scripts/populate-boot-files.sh scripts/build-atlantian-debs.sh
+require_text 'SD FIT slot B' 'atlantian-B.itb' scripts/populate-boot-files.sh scripts/build-atlantian-debs.sh
+require_text 'SD active-slot marker' 'atlantian-slot-B' scripts/populate-boot-files.sh scripts/build-atlantian-debs.sh
+require_text 'SD FIT SHA-256' 'hash-1 { algo = "sha256"; };' scripts/populate-boot-files.sh
+require_text 'SD FIT boot' 'bootm 0x02000000' scripts/populate-boot-files.sh
+require_text 'legacy SD kernel migration fallback' 'fatload mmc 0:1 0x02000000 uImage' scripts/populate-boot-files.sh
+require_text 'legacy SD DT migration fallback' 'fatload mmc 0:1 0x01F00000 devicetree.dtb' scripts/populate-boot-files.sh
 require_text 'NAND stage hook is explicit' 'atln-stage.scr' scripts/populate-boot-files.sh
 
 # NAND U-Boot.
@@ -188,6 +195,10 @@ require_text 'simple extroot command' 'atlantian-storage adopt' scripts/atlantia
 
 # Update boundaries and release-upgrade gate.
 require_text 'live NAND .deb update refusal' 'atlantian-kernel cannot update a live NAND edition' scripts/build-atlantian-debs.sh
+require_text 'SD inactive FIT staging' 'inactive=' scripts/build-atlantian-debs.sh
+require_text 'SD FIT byte verification' 'cmp -s "$fit" "$target/.$dest.new"' scripts/build-atlantian-debs.sh
+require_text 'SD FIT active marker' 'atlantian-slot-B' scripts/build-atlantian-debs.sh
+require_text 'SD legacy migration detection' 'if [ ! -s "$target/atlantian-A.itb" ] || [ ! -s "$target/atlantian-B.itb" ]; then' scripts/build-atlantian-debs.sh
 require_text 'NAND sysupgrade wrapper' 'atlantian-sysupgrade-nand' scripts/build-atlantian-debs.sh scripts/install-nand-tools.sh
 require_text 'NAND maintenance tool' 'atlantian-nand-upgrade' scripts/install-nand-tools.sh scripts/atlantian-sysupgrade-nand.sh
 require_text 'NAND cross-major fail closed' 'requires a clean NAND reinstall' scripts/atlantian-nand-upgrade.sh
@@ -213,8 +224,8 @@ require_text 'NAND manifest schema starts at one' '"schema_version":1' scripts/b
 require_text 'workflow concurrency guard' 'group: atlantian-release' .github/workflows/build-release.yml
 require_text 'superseded-build publication guard' 'superseded by a newer main commit' .github/workflows/build-release.yml
 require_text 'pinned provenance action' 'actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8' .github/workflows/build-release.yml
-require_text 'Debian watcher local cadence' "cron: '17 6 * * *'" .github/workflows/debian-watch.yml
-require_text 'Debian watcher local timezone' "timezone: 'Asia/Tomsk'" .github/workflows/debian-watch.yml
+require_text 'upstream watcher local cadence' "cron: '17 6 * * *'" .github/workflows/debian-watch.yml
+require_text 'upstream watcher local timezone' "timezone: 'Asia/Tomsk'" .github/workflows/debian-watch.yml
 require_text 'release parameter section' '## Release' scripts/generate-release-notes.sh
 require_text 'release storage metrics' '## Storage metrics' scripts/generate-release-notes.sh
 require_text 'release artifact section' '## Artifacts' scripts/generate-release-notes.sh
@@ -223,10 +234,8 @@ require_text 'release batch policy' 'release_input_commits >= 5' .github/workflo
 require_text 'release batch counter' 'release-batch-state.sh' .github/workflows/build-release.yml
 require_text 'presentation-only release notes excluded from builds' '!scripts/generate-release-notes.sh' .github/workflows/build-release.yml scripts/release-batch-state.sh
 
-# Repository hygiene.
-reject_text 'architecture leaked into release/image identity' 'armhf' \
-  config/release.env scripts/generate-release-metadata.sh scripts/generate-release-notes.sh \
-  .github/workflows/build-release.yml README.md docs/INSTALLATION.md docs/QUICKSTART.md docs/PIPELINE.md
+# Repository hygiene. Release/image identity is proven above by evaluating the
+# actual variables; ordinary documentation may name the supported Debian arch.
 reject_regex 'developer-local absolute path' '/home/[^/[:space:]]+/atlantian' scripts config .github README.md docs .gitignore
 
-echo 'source contracts passed: release identity, Debian integration, board naming, release pins, shared SD/NAND userspace, raw-NAND safety and update boundaries'
+echo 'source contracts passed: release identity, Debian integration, board naming, release pins, shared SD/NAND userspace, transactional SD boot, raw-NAND safety and update boundaries'

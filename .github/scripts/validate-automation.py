@@ -16,7 +16,7 @@ PROTECTED_MERGE = ROOT / ".github" / "scripts" / "merge-protected-main.sh"
 EXPECTED_WORKFLOWS = {
     "ci.yml": "CI",
     "build-release.yml": "Build & Release",
-    "debian-watch.yml": "Debian Base Watch",
+    "debian-watch.yml": "Upstream Base Watch",
     "dependabot-actions-automerge.yml": "Dependabot Auto-merge",
     "image-download-metrics.yml": "Download Metrics",
 }
@@ -147,6 +147,16 @@ def validate_workflows() -> None:
     scope_step = step_named(ci, "validate", "Detect validation scope")
     require_run(scope_step, "workflow_dispatch", "explicit protected-branch validation")
     require_run(scope_step, 'git merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"', "explicit validation ancestry")
+    require_run(scope_step, "kernel_inputs=true", "kernel validation scope")
+    contracts_step = step_named(ci, "validate", "Validate shell and source contracts")
+    require_run(contracts_step, "test-release-metrics.sh", "release-metrics PR parity")
+    kernel_smoke = step_named(ci, "validate", "Compile kernel smoke target")
+    require_run(kernel_smoke, "build-kernel.sh config", "kernel pin/config validation")
+    require_run(
+        kernel_smoke,
+        "zImage modules xilinx/zynq-bitmain-antminer-s9.dtb",
+        "kernel compile smoke gate",
+    )
 
     build = parsed["build-release.yml"]
     publish_job = (build.get("jobs") or {}).get("publish", {})
@@ -167,7 +177,6 @@ def validate_workflows() -> None:
         fail("build-release.yml: presentation-only release notes must not trigger image builds")
 
     plan = step_named(build, "plan", "Find reusable verified build")
-    plan_run = str(plan.get("run", ""))
     require_run(plan, "scripts/release-batch-state.sh", "release batch policy")
     require_run(plan, "release_input_commits >= 5", "release batch threshold")
     batch_state = (ROOT / "scripts" / "release-batch-state.sh").read_text(encoding="utf-8")
@@ -241,26 +250,76 @@ def validate_workflows() -> None:
         ".github/workflows/debian-watch.yml",
         ".github/workflows/ci.yml",
         ".github/scripts/merge-protected-main.sh",
+        "scripts/refresh-debian-base.sh",
+        "scripts/refresh-linux-base.sh",
+        "scripts/refresh-uboot-base.sh",
     }
     if watcher_push.get("branches") != ["main"] or set(watcher_push.get("paths") or []) != expected_watch_paths:
-        fail("debian-watch.yml: automation-plumbing push trigger is incomplete")
+        fail("debian-watch.yml: upstream/plumbing push trigger is incomplete")
 
-    snapshot_step = step_named(watcher, "refresh", "Commit snapshot through protected main")
-    require_run(snapshot_step, "merge-protected-main.sh", "protected Debian snapshot merge")
-    require_run(snapshot_step, "git add debian-release.sha256 debian-updates-release.sha256 debian-security-release.sha256", "Debian snapshot commit scope")
-    require_run(snapshot_step, "config/debian-snapshot.env", "Debian snapshot commit scope")
-    snapshot_run = str(snapshot_step.get("run", ""))
-    forbidden_release_mutations = (
-        "git add config/release.env",
-        "config/debian-snapshot.env config/release.env",
-        "sed -i",
-        "sed -iE",
-        "sed -i -E",
+    require_run(
+        step_named(watcher, "refresh", "Refresh Debian snapshot"),
+        "refresh-debian-base.sh",
+        "Debian upstream refresh",
     )
-    if any(token in snapshot_run for token in forbidden_release_mutations):
-        fail("Debian snapshot refresh must not mutate or stage the AtlANTian release version")
-    dispatch_step = step_named(watcher, "refresh", "Dispatch verified release build")
-    require_run(dispatch_step, "gh workflow run build-release.yml --ref main -f publish=false -f origin=debian-watch", "Debian snapshot publication dispatch")
+    require_run(
+        step_named(watcher, "refresh", "Refresh Linux LTS patchlevel"),
+        "refresh-linux-base.sh",
+        "Linux upstream refresh",
+    )
+    require_run(
+        step_named(watcher, "refresh", "Refresh U-Boot stable release"),
+        "refresh-uboot-base.sh",
+        "U-Boot upstream refresh",
+    )
+    decision = step_named(watcher, "refresh", "Decide upstream transaction")
+    require_run(decision, "boot_changed=true", "upstream boot-input classification")
+    require_run(decision, "DEBIAN_CHANGED", "upstream Debian classification")
+    require_run(decision, "KERNEL_CHANGED", "upstream Linux classification")
+    require_run(decision, "UBOOT_CHANGED", "upstream U-Boot classification")
+    step_named(watcher, "refresh", "Validate release inputs")
+
+    linux_gate = step_named(watcher, "refresh", "Validate Linux candidate build")
+    require_run(linux_gate, "build-kernel.sh config", "Linux candidate config gate")
+    require_run(
+        linux_gate,
+        "zImage modules xilinx/zynq-bitmain-antminer-s9.dtb",
+        "Linux candidate compile gate",
+    )
+    uboot_gate = step_named(watcher, "refresh", "Validate U-Boot SD and NAND builds")
+    require_run(uboot_gate, "build-uboot.sh", "U-Boot SD candidate gate")
+    require_run(uboot_gate, "build-uboot-nand.sh", "U-Boot NAND/SPL candidate gate")
+
+    upstream_step = step_named(watcher, "refresh", "Commit upstream inputs through protected main")
+    require_run(upstream_step, "merge-protected-main.sh", "protected upstream merge")
+    require_run(
+        upstream_step,
+        "git add debian-release.sha256 debian-updates-release.sha256 debian-security-release.sha256",
+        "upstream commit scope",
+    )
+    require_run(
+        upstream_step,
+        "config/debian-snapshot.env config/release.env config/u-boot.env",
+        "upstream commit scope",
+    )
+    require_run(upstream_step, "release-batch-state.sh HEAD", "coalesced release batching")
+    require_run(upstream_step, "BOOT_CHANGED", "urgent boot-input release gate")
+    require_run(upstream_step, "release_due=true", "urgent boot-input release gate")
+
+    dispatch_step = step_named(watcher, "refresh", "Dispatch combined verified release build")
+    require_run(
+        dispatch_step,
+        "gh workflow run build-release.yml --ref main -f publish=false -f origin=debian-watch",
+        "combined upstream publication dispatch",
+    )
+    recovery_step = step_named(watcher, "refresh", "Recover undispatched upstream build")
+    require_run(recovery_step, "release-batch-state.sh HEAD", "upstream dispatch recovery")
+    require_run(recovery_step, "config/release.env config/u-boot.env", "boot-input recovery detection")
+    require_run(
+        recovery_step,
+        "gh workflow run build-release.yml --ref main -f publish=false -f origin=debian-watch",
+        "upstream dispatch recovery",
+    )
     require_run(step_named(watcher, "refresh", "Keep schedule active"), "merge-protected-main.sh", "protected watcher heartbeat")
     step_named(watcher, "refresh", "Report Debian major availability")
 

@@ -23,10 +23,15 @@ LOOP=$(losetup --find --show --partscan "$IMAGE"); sleep 1
 
 BOOT=$WORK/boot; ROOT=$WORK/root; mkdir -p "$BOOT" "$ROOT"
 mount -o ro "${LOOP}p1" "$BOOT"; mount -o ro "${LOOP}p2" "$ROOT"
-for f in BOOT.bin u-boot.img boot.scr devicetree.dtb uImage uEnv.txt; do
+for f in BOOT.bin u-boot.img boot.scr uEnv.txt atlantian-A.itb atlantian-B.itb atlantian-boot-abi; do
   [ -s "$BOOT/$f" ] || { echo "missing boot asset: $f" >&2; exit 3; }
 done
-[ ! -e "$BOOT/zImage" ] || { echo 'raw zImage must not duplicate uImage on FAT' >&2; exit 3; }
+[ "$(cat "$BOOT/atlantian-boot-abi")" = 1 ]
+[ ! -e "$BOOT/atlantian-slot-B" ] || { echo 'factory image must start from FIT slot A' >&2; exit 3; }
+for legacy in zImage uImage devicetree.dtb; do
+  [ ! -e "$BOOT/$legacy" ] || { echo "legacy SD boot asset must not be present: $legacy" >&2; exit 3; }
+done
+cmp "$BOOT/atlantian-A.itb" "$BOOT/atlantian-B.itb"
 
 # The image must never cap RAM from the Linux command line. The DT carries the
 # 1 GiB S9 probe ceiling; source-built U-Boot probes DDR and fixes /memory.
@@ -36,15 +41,18 @@ strings "$BOOT/boot.scr" >"$boot_script_strings"
 ! grep -Eq '(^|[[:space:]])mem=[^[:space:]]+' "$boot_script_strings"
 grep -Fq 'atlantian_normal_bootargs=console=ttyPS0,115200n8 root=/dev/mmcblk0p2' "$BOOT/uEnv.txt"
 grep -Fq 'root=/dev/mmcblk0p2 rootfstype=ext4 rw rootwait' "$boot_script_strings"
-grep -Fq 'fatload mmc 0:1 0x02000000 uImage' "$boot_script_strings"
-grep -Fq 'fatload mmc 0:1 0x01F00000 devicetree.dtb' "$boot_script_strings"
-grep -Fq 'bootm 0x02000000 - 0x01F00000' "$boot_script_strings"
+grep -Fq 'atlantian-slot-B' "$boot_script_strings"
+grep -Fq 'atlantian-A.itb' "$boot_script_strings"
+grep -Fq 'atlantian-B.itb' "$boot_script_strings"
+grep -Fq 'bootm 0x02000000' "$boot_script_strings"
 mkimage -l "$BOOT/boot.scr" >"$WORK/boot-script.info"
-mkimage -l "$BOOT/uImage" >"$WORK/kernel-image.info"
+mkimage -l "$BOOT/atlantian-A.itb" >"$WORK/fit.info"
 grep -q 'Script' "$WORK/boot-script.info"
-grep -q 'ARM Linux Kernel Image' "$WORK/kernel-image.info"
-[ "$(fdtget -t x "$BOOT/devicetree.dtb" /memory@0 reg)" = '0 40000000' ] || {
-  echo 'device tree no longer exposes the 1 GiB DDR probe ceiling' >&2
+grep -q 'FIT description' "$WORK/fit.info"
+grep -q 'Hash algo:.*sha256' "$WORK/fit.info"
+dumpimage -T flat_dt -p 1 -o "$WORK/devicetree.dtb" "$BOOT/atlantian-A.itb" >/dev/null
+[ "$(fdtget -t x "$WORK/devicetree.dtb" /memory@0 reg)" = '0 40000000' ] || {
+  echo 'FIT device tree no longer exposes the 1 GiB DDR probe ceiling' >&2
   exit 3
 }
 
@@ -80,4 +88,4 @@ if [ -n "${SUDO_UID:-}" ] && [ "$SUDO_UID" != 0 ]; then
   [ -z "$(find "$ROOT" -xdev -uid "$SUDO_UID" -print -quit)" ]
 fi
 
-echo 'two-partition image, compact source-built boot chain, dynamic DDR, vendor systemd units, live APT, Debian lifecycle, identity and ownership contracts passed'
+echo 'two-partition image, transactional A/B FIT boot, dynamic DDR, vendor systemd units, live APT, Debian lifecycle, identity and ownership contracts passed'

@@ -38,7 +38,7 @@ jobs:
   validate:
     name: Validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - name: Checkout
         # v7.0.1
@@ -70,6 +70,7 @@ jobs:
           actions=false
           contracts=false
           release_inputs=false
+          kernel_inputs=false
           for path in "${changed[@]}"; do
             case "$path" in
               .github/workflows/*|.github/dependabot.yml|.github/scripts/actions-policy.py|.github/scripts/validate-automation.py|.github/scripts/merge-protected-main.sh)
@@ -86,11 +87,17 @@ jobs:
                 release_inputs=true
                 ;;
             esac
+            case "$path" in
+              config/release.env|config/kernel.fragment|config/kernel-prune.fragment|board/zynq-bitmain-antminer-s9.dts|kernel-overlay/*|scripts/build-kernel.sh|scripts/prepare-kernel-source.sh|scripts/refresh-linux-base.sh)
+                kernel_inputs=true
+                ;;
+            esac
           done
           {
             echo "actions=$actions"
             echo "contracts=$contracts"
             echo "release_inputs=$release_inputs"
+            echo "kernel_inputs=$kernel_inputs"
           } >> "$GITHUB_OUTPUT"
 
       - name: Install validation dependencies
@@ -120,10 +127,29 @@ jobs:
           bash scripts/test-release-versioning.sh
           bash scripts/test-source-contracts.sh
           bash scripts/test-update-leds.sh
+          bash scripts/test-release-metrics.sh
 
       - name: Validate release inputs
         if: steps.scope.outputs.release_inputs == 'true'
         run: bash scripts/validate-release-inputs.sh
+
+      - name: Install kernel smoke dependencies
+        if: steps.scope.outputs.kernel_inputs == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-linux-gnueabihf bc bison flex libssl-dev libelf-dev dwarves \
+            device-tree-compiler git make python3
+
+      - name: Compile kernel smoke target
+        if: steps.scope.outputs.kernel_inputs == 'true'
+        env:
+          SRC: ${{ github.workspace }}/out/ci-linux-src
+        run: |
+          set -euo pipefail
+          bash scripts/build-kernel.sh config
+          make -C "$SRC" -j"$(nproc)" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- \
+            zImage modules xilinx/zynq-bitmain-antminer-s9.dtb
 
       - name: Prepare Actions smoke payload
         if: steps.scope.outputs.actions == 'true'

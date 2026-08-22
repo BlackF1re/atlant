@@ -1,4 +1,4 @@
-name: Debian Base Watch
+name: Upstream Base Watch
 
 on:
   schedule:
@@ -12,6 +12,9 @@ on:
       - '.github/workflows/debian-watch.yml'
       - '.github/workflows/ci.yml'
       - '.github/scripts/merge-protected-main.sh'
+      - 'scripts/refresh-debian-base.sh'
+      - 'scripts/refresh-linux-base.sh'
+      - 'scripts/refresh-uboot-base.sh'
 
 permissions:
   actions: write
@@ -19,14 +22,14 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: atlantian-debian-watch
+  group: atlantian-upstream-watch
   cancel-in-progress: false
 
 jobs:
   refresh:
-    name: Refresh Debian base
+    name: Refresh reproducible base
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     permissions:
       actions: write
       contents: write
@@ -43,9 +46,82 @@ jobs:
         id: debian
         run: bash scripts/refresh-debian-base.sh
 
-      - name: Validate snapshot
-        if: steps.debian.outputs.changed == 'true'
+      - name: Refresh Linux LTS patchlevel
+        id: kernel
+        run: bash scripts/refresh-linux-base.sh
+
+      - name: Refresh U-Boot stable release
+        id: uboot
+        run: bash scripts/refresh-uboot-base.sh
+
+      - name: Decide upstream transaction
+        id: upstream
+        shell: bash
+        env:
+          DEBIAN_CHANGED: ${{ steps.debian.outputs.changed }}
+          KERNEL_CHANGED: ${{ steps.kernel.outputs.changed }}
+          UBOOT_CHANGED: ${{ steps.uboot.outputs.changed }}
+        run: |
+          set -euo pipefail
+          changed=false
+          boot_changed=false
+          [[ "$DEBIAN_CHANGED" == true || "$KERNEL_CHANGED" == true || "$UBOOT_CHANGED" == true ]] && changed=true
+          [[ "$KERNEL_CHANGED" == true || "$UBOOT_CHANGED" == true ]] && boot_changed=true
+          {
+            echo "changed=$changed"
+            echo "boot_changed=$boot_changed"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo '## Upstream input transaction'
+            echo
+            echo '| Input | Changed | Candidate |'
+            echo '|---|---:|---|'
+            echo "| Debian Snapshot | $DEBIAN_CHANGED | ${{ steps.debian.outputs.snapshot || 'unchanged' }} |"
+            echo "| Linux LTS | $KERNEL_CHANGED | ${{ steps.kernel.outputs.version }} |"
+            echo "| U-Boot stable | $UBOOT_CHANGED | ${{ steps.uboot.outputs.version }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate release inputs
+        if: steps.upstream.outputs.changed == 'true'
         run: bash scripts/validate-release-inputs.sh
+
+      - name: Install boot-input validation dependencies
+        if: steps.upstream.outputs.boot_changed == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-linux-gnueabihf bc bison flex libssl-dev libncurses-dev \
+            libelf-dev libdw-dev dwarves device-tree-compiler u-boot-tools git make \
+            python3 python3-dev python3-setuptools python3-pyelftools swig
+
+      - name: Validate Linux candidate build
+        if: steps.kernel.outputs.changed == 'true'
+        env:
+          SRC: ${{ github.workspace }}/out/watch-linux-src
+        run: |
+          set -euo pipefail
+          bash scripts/build-kernel.sh config
+          make -C "$SRC" -j"$(nproc)" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- \
+            zImage modules xilinx/zynq-bitmain-antminer-s9.dtb
+
+      - name: Validate U-Boot SD and NAND builds
+        if: steps.uboot.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$GITHUB_WORKSPACE/out/uboot-watch"
+          rm -rf "$work"
+          mkdir -p "$work"
+          # NAND U-Boot only needs exact payload lengths at this gate. The real
+          # release build later compiles against the real kernel/DTB/initramfs.
+          truncate -s 4194304 "$work/zImage"
+          truncate -s 65536 "$work/devicetree.dtb"
+          truncate -s 1048576 "$work/initramfs.cpio.gz"
+          UBOOT_SRC="$work/source" UBOOT_BUILD="$work/sd-build" UBOOT_OUT="$work/sd-out" \
+            bash scripts/build-uboot.sh
+          UBOOT_SRC="$work/source" UBOOT_NAND_BUILD="$work/nand-build" UBOOT_NAND_OUT="$work/nand-out" \
+            ZIMAGE="$work/zImage" DTB="$work/devicetree.dtb" INITRAMFS="$work/initramfs.cpio.gz" \
+            bash scripts/build-uboot-nand.sh
 
       - name: Report Debian major availability
         if: steps.debian.outputs.major_available == 'true'
@@ -57,55 +133,84 @@ jobs:
             echo 'AtlANTian will remain on the configured Debian generation until an explicit release-line transition is made.'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Commit snapshot through protected main
-        id: snapshot_merge
-        if: steps.debian.outputs.changed == 'true'
+      - name: Commit upstream inputs through protected main
+        id: upstream_merge
+        if: steps.upstream.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          BOOT_CHANGED: ${{ steps.upstream.outputs.boot_changed }}
         run: |
           set -euo pipefail
-          . config/release.env
           git config user.name github-actions
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add debian-release.sha256 debian-updates-release.sha256 debian-security-release.sha256 \
-            config/debian-snapshot.env
-          title="chore(debian): refresh ${DEBIAN_CODENAME} snapshot"
+            config/debian-snapshot.env config/release.env config/u-boot.env
+          git diff --cached --quiet && { echo 'watcher reported changes but produced no tracked input delta' >&2; exit 1; }
+          title='chore(upstream): refresh reproducible build inputs'
           git commit -m "$title"
+
+          release_input_commits=$(bash scripts/release-batch-state.sh HEAD)
+          latest_tag=$(git tag --list 'v*' --sort=-version:refname | head -n1)
+          unreleased_boot_delta=$BOOT_CHANGED
+          if [[ -z "$latest_tag" ]]; then
+            # A repository without a published release must not defer its first
+            # accepted boot stack behind the ordinary Debian batch threshold.
+            unreleased_boot_delta=true
+          elif ! git diff --quiet "$latest_tag" -- config/release.env config/u-boot.env; then
+            # Boot-input urgency is relative to the last published binary state,
+            # not merely to what happened to change in this watcher invocation.
+            unreleased_boot_delta=true
+          fi
+
+          release_due=false
+          if [[ "$unreleased_boot_delta" == true ]] || (( release_input_commits >= 5 )); then
+            release_due=true
+          fi
+
           base_sha=$GITHUB_SHA
           head_sha=$(git rev-parse HEAD)
-          branch="maintenance/debian-snapshot-${{ steps.debian.outputs.snapshot }}-${GITHUB_RUN_ID}"
+          branch="maintenance/upstream-base-${GITHUB_RUN_ID}"
           merge_sha=$(bash .github/scripts/merge-protected-main.sh "$branch" "$title" "$base_sha" "$head_sha")
           [[ "$merge_sha" =~ ^[0-9a-f]{40}$ ]] || {
             echo "protected merge helper returned invalid SHA: $merge_sha" >&2
             exit 1
           }
-          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
+          {
+            echo "merge_sha=$merge_sha"
+            echo "release_due=$release_due"
+            echo "release_input_commits=$release_input_commits"
+            echo "unreleased_boot_delta=$unreleased_boot_delta"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Dispatch verified release build
-        if: steps.debian.outputs.changed == 'true'
+      - name: Dispatch combined verified release build
+        if: steps.upstream.outputs.changed == 'true' && steps.upstream_merge.outputs.release_due == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          EXPECTED_MAIN: ${{ steps.snapshot_merge.outputs.merge_sha }}
+          EXPECTED_MAIN: ${{ steps.upstream_merge.outputs.merge_sha }}
         run: |
           set -euo pipefail
           [[ "$EXPECTED_MAIN" =~ ^[0-9a-f]{40}$ ]]
           main_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
           [[ "$main_sha" == "$EXPECTED_MAIN" ]] || {
-            echo "protected main moved after snapshot merge: expected $EXPECTED_MAIN, got $main_sha" >&2
+            echo "protected main moved after upstream merge: expected $EXPECTED_MAIN, got $main_sha" >&2
             exit 1
           }
-          # GITHUB_TOKEN merges do not recursively trigger push workflows.
-          # Dispatch the exact validated main revision explicitly; build-release
-          # recognizes this origin and bypasses the normal five-commit batch.
+          # Keep the existing trusted automatic-publication origin understood by
+          # build-release.yml; the watcher now supplies Debian + boot inputs as
+          # one transaction rather than Debian alone.
           gh workflow run build-release.yml --ref main -f publish=false -f origin=debian-watch
 
-      # Self-heal the narrow failure window between a successful protected
-      # Snapshot merge and the explicit Build & Release dispatch. If the frozen
-      # Snapshot files in current main differ from the latest published tag, the
-      # factory baseline has not yet been represented by a release.
-      - name: Recover undispatched snapshot build
+      - name: Report deferred Debian-only release
+        if: steps.upstream.outputs.changed == 'true' && steps.upstream_merge.outputs.release_due != 'true'
+        run: |
+          echo "Debian-only factory refresh accumulated ${{ steps.upstream_merge.outputs.release_input_commits }}/5 release-input commits; binary publication is intentionally deferred." >> "$GITHUB_STEP_SUMMARY"
+
+      # Self-heal the narrow failure window between a successful protected merge
+      # and the explicit Build & Release dispatch. Boot-input deltas are urgent;
+      # Debian-only deltas remain subject to the normal five-commit batch.
+      - name: Recover undispatched upstream build
         id: recovery
-        if: steps.debian.outputs.changed != 'true'
+        if: steps.upstream.outputs.changed != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -113,18 +218,27 @@ jobs:
           echo 'dispatched=false' >> "$GITHUB_OUTPUT"
           latest_tag=$(git tag --list 'v*' --sort=-version:refname | head -n1)
           [[ -n "$latest_tag" ]] || exit 0
-          if git diff --quiet "$latest_tag" -- \
-            config/debian-snapshot.env \
-            debian-release.sha256 debian-updates-release.sha256 debian-security-release.sha256; then
+          upstream_paths=(
+            config/debian-snapshot.env
+            debian-release.sha256 debian-updates-release.sha256 debian-security-release.sha256
+            config/release.env config/u-boot.env
+          )
+          git diff --quiet "$latest_tag" -- "${upstream_paths[@]}" && exit 0
+
+          release_input_commits=$(bash scripts/release-batch-state.sh HEAD)
+          boot_delta=false
+          git diff --quiet "$latest_tag" -- config/release.env config/u-boot.env || boot_delta=true
+          if [[ "$boot_delta" != true ]] && (( release_input_commits < 5 )); then
+            echo "Unreleased Debian-only inputs remain below batch threshold: ${release_input_commits}/5."
             exit 0
           fi
 
           main_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
           [[ "$main_sha" == "$GITHUB_SHA" ]] || {
-            echo "main moved before snapshot-build recovery: expected $GITHUB_SHA, got $main_sha" >&2
+            echo "main moved before upstream-build recovery: expected $GITHUB_SHA, got $main_sha" >&2
             exit 1
           }
-          echo "Current frozen Debian Snapshot differs from $latest_tag; recovering the missing release dispatch."
+          echo "Current reproducible inputs differ from $latest_tag and are release-eligible; recovering the missing dispatch."
           gh workflow run build-release.yml --ref main -f publish=false -f origin=debian-watch
           echo 'dispatched=true' >> "$GITHUB_OUTPUT"
 
@@ -132,7 +246,7 @@ jobs:
       # inactivity. Refresh repository activity only when the source tree itself
       # has been quiet for 45 days; use the same protected-main validation path.
       - name: Keep schedule active
-        if: steps.debian.outputs.changed != 'true' && steps.recovery.outputs.dispatched != 'true'
+        if: steps.upstream.outputs.changed != 'true' && steps.recovery.outputs.dispatched != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -142,9 +256,9 @@ jobs:
           (( now - last >= 45 * 86400 )) || exit 0
           git config user.name github-actions
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          title='chore: keep Debian watcher active'
+          title='chore: keep upstream watcher active'
           git commit --allow-empty -m "$title"
           base_sha=$GITHUB_SHA
           head_sha=$(git rev-parse HEAD)
-          branch="maintenance/debian-heartbeat-${GITHUB_RUN_ID}"
+          branch="maintenance/upstream-heartbeat-${GITHUB_RUN_ID}"
           bash .github/scripts/merge-protected-main.sh "$branch" "$title" "$base_sha" "$head_sha" >/dev/null
